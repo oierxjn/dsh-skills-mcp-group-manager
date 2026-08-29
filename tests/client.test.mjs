@@ -141,8 +141,8 @@ test('apply() wires locale, stylesheet, and the slot registrations', () => {
   assert.equal(groups.options.label(), 'Skill groups');
   assert.equal(typeof groups.component, 'function');
 
-  const mcp = slotRegs.find((entry) => entry.options.id === 'mcp');
-  assert.ok(mcp, 'mcp settings section present');
+  const mcp = slotRegs.find((entry) => entry.options.id === 'skills-mcp-manager');
+  assert.ok(mcp, 'skills-mcp-manager settings section present');
   assert.equal(mcp.options.name, 'settings.section');
   assert.equal(mcp.options.order, 18);
   assert.equal(mcp.options.locale, 'mcp-skill-manager');
