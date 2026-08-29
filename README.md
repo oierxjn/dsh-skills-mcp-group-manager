@@ -12,7 +12,7 @@
 ---
 
 > [!IMPORTANT]
-> **Fork 维护声明 / Fork notice** — 本仓库 fork 自 [SeverusZh/dsh-skills-mcp-group-manager](https://github.com/SeverusZh/dsh-skills-mcp-group-manager),自 0.4.0 起由 [oierxjn](https://github.com/oierxjn) **自行维护,不再向上游提交 PR**。向上游同步用 `git fetch upstream`(remote `upstream` 指向上游);问题与 PR 请提到本仓库。
+> **Fork 维护声明 / Fork notice** — 本仓库 fork 自 [SeverusZh/dsh-skills-mcp-group-manager](https://github.com/SeverusZh/dsh-skills-mcp-group-manager),自 0.4.0 起由 [oierxjn](https://github.com/oierxjn) **自行维护,不再向上游提交 PR**。分支模型:**默认分支 `downstream` 承载全部维护工作;`main` 是上游的纯镜像**,只随 `upstream` remote fast-forward,不直接提交。向上游同步用 `git fetch upstream`(remote `upstream` 指向上游);问题与 PR 请提到本仓库(目标分支 `downstream`)。
 
 ---
 
