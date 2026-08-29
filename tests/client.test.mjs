@@ -5,8 +5,9 @@
  * (`window.__ModuleLoader__.load({ id, factory })`). These tests evaluate it
  * with stubbed browser globals and a stubbed `react` seed word, then verify:
  *  1. the registration id and the factory's plugin face ({ apply, inject });
- *  2. apply() wires locale dictionaries, the stylesheet, and both slot
- *     registrations with the planned ids/orders;
+ *  2. apply() wires locale dictionaries, the stylesheet, and the three slot
+ *     registrations (two settings sections + the session header button) with
+ *     the planned ids/orders;
  *  3. the stylesheet effect is fiber-scoped (disposer removes the tag).
  *
  * Run: node --test (auto-discovers tests/*.test.mjs)
@@ -72,7 +73,7 @@ test('bundle registers under the package id and exports a plugin face', () => {
   assert.deepEqual(plugin.inject, ['slots', 'locale']);
 });
 
-test('apply() wires locale, stylesheet, and both slot registrations', () => {
+test('apply() wires locale, stylesheet, and the slot registrations', () => {
   const { plugin, styleTags } = evaluateBundle();
   const localeRegs = [];
   const slotInjects = [];
@@ -89,6 +90,7 @@ test('apply() wires locale, stylesheet, and both slot registrations', () => {
         localeRegs.push({ ns, dicts });
         return () => {};
       },
+      bind: (ns) => (key) => localeRegs[0]?.dicts.en[key] ?? key,
     },
     slots: {
       inject: (key, callback) => { slotInjects.push({ key, callback }); },
@@ -102,14 +104,15 @@ test('apply() wires locale, stylesheet, and both slot registrations', () => {
   assert.equal(localeRegs[0].ns, 'mcp-skill-manager');
   assert.equal(typeof localeRegs[0].dicts.zh, 'object');
   assert.equal(typeof localeRegs[0].dicts.en, 'object');
-  assert.equal(localeRegs[0].dicts.zh['panel.title'], 'MCP 与 Skills 管理');
-  assert.equal(localeRegs[0].dicts.en['panel.title'], 'MCP & Skills manager');
+  assert.equal(localeRegs[0].dicts.zh['navGroups'], '技能分组');
+  assert.equal(localeRegs[0].dicts.en['navGroups'], 'Skill groups');
 
   // stylesheet: one style tag, fiber-scoped disposer removes it
   assert.equal(styleTags.length, 1);
   assert.equal(styleTags[0].dataset.plugin, 'dsh-skills-mcp-group-manager');
   assert.equal(styleTags[0].dataset.pluginCss, 'dsh-skills-mcp-group-manager/panel.css');
-  assert.ok(styleTags[0].textContent.includes('.msm-panel'));
+  assert.ok(styleTags[0].textContent.includes('.msm-settings'));
+  assert.ok(!styleTags[0].textContent.includes('.msm-panel'), 'panel chrome styles are gone');
   assert.ok(styleTags[0].textContent.includes('var(--dsw-alias-'));
   // regression guard: the client must never mutate product layout via
   // `data-phase` selectors or root CSS variables (caused app-wide flicker
@@ -121,23 +124,33 @@ test('apply() wires locale, stylesheet, and both slot registrations', () => {
   styleEffect.disposer();
   assert.equal(styleTags.length, 0, 'stylesheet disposer removes the tag');
 
-  // slot declarations: panel (overlay) + header toggle only
+  // slot declarations: two settings sections + the session header button
   assert.deepEqual(slotInjects.map((entry) => entry.key), [
-    'shell.overlay',
+    'settings.section',
+    'settings.section',
     'conversation.session.header.actions',
   ]);
   for (const { callback } of slotInjects) callback();
-  assert.equal(slotRegs.length, 2);
+  assert.equal(slotRegs.length, 3);
 
-  const panel = slotRegs.find((entry) => entry.options.id === 'mcp-skill-manager-panel');
-  assert.ok(panel, 'panel registration present');
-  assert.equal(panel.options.name, 'shell.overlay');
-  assert.equal(panel.options.order, 70);
-  assert.equal(panel.options.locale, 'mcp-skill-manager');
-  assert.equal(typeof panel.component, 'function');
+  const groups = slotRegs.find((entry) => entry.options.id === 'skill-groups');
+  assert.ok(groups, 'skill-groups settings section present');
+  assert.equal(groups.options.name, 'settings.section');
+  assert.equal(groups.options.order, 17);
+  assert.equal(groups.options.locale, 'mcp-skill-manager');
+  assert.equal(groups.options.label(), 'Skill groups');
+  assert.equal(typeof groups.component, 'function');
+
+  const mcp = slotRegs.find((entry) => entry.options.id === 'mcp');
+  assert.ok(mcp, 'mcp settings section present');
+  assert.equal(mcp.options.name, 'settings.section');
+  assert.equal(mcp.options.order, 18);
+  assert.equal(mcp.options.locale, 'mcp-skill-manager');
+  assert.equal(mcp.options.label(), 'MCP');
+  assert.equal(typeof mcp.component, 'function');
 
   const toggle = slotRegs.find((entry) => entry.options.id === 'mcp-skill-manager-toggle');
-  assert.ok(toggle, 'toggle registration present');
+  assert.ok(toggle, 'header toggle registration present');
   assert.equal(toggle.options.name, 'conversation.session.header.actions');
   assert.equal(toggle.options.order, 10);
   assert.equal(typeof toggle.component, 'function');
