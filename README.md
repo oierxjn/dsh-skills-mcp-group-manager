@@ -20,9 +20,10 @@
 
 - **🎯 Skill 分组 / Skill Groups** — 创建/重命名/删除分组,分组可折叠;成员与挑选器均为列表 + 多选,支持搜索过滤后的全选/全不选与批量增删。
 - **🧠 注入过滤 / Injection Filtering** — 上下文只注入启用分组中出现的 Skill(并集去重,一次一个);未分组 Skill 默认不注入;切换分组实时刷新目录。
+- **🧵 按会话分组 / Per-session Groups** — 每个会话可脱离全局独立勾选启用的分组(会话头部按钮弹出);未设置的会话跟随全局。详见下文「按会话分组」。
 - **🔌 MCP 管理 / MCP Management** — 以 profile 的 `cordis.patch.yml` 为唯一事实源:枚举 loader 组合中的全部 MCP 服务器(含实时状态与工具数),启停/增删改直接编辑补丁文件,由宿主 HMR 热重载真实生效(无需重启);支持一键连接探测(独立客户端 `initialize` + `tools/list`,8s 超时)。
-- **💾 持久化 / Persistence** — `~/.dsh/mcp-skill-manager/state.json`(原子写)仅存分组;下次会话默认沿用上次分组设置。
-- **🖥️ UI** — 对话框左侧分组管理面板(`shell.overlay`)+ 会话头部开关(`conversation.session.header.actions`,带 "Skills&MCPs" 标签)。纯浮动面板,不修改产品布局。
+- **💾 持久化 / Persistence** — `~/.dsh/mcp-skill-manager/state.json`(原子写)存分组与各会话覆写;下次会话默认沿用上次设置。
+- **🖥️ UI** — 对话框左侧分组管理面板(`shell.overlay`)+ 会话头部按钮(`conversation.session.header.actions`,带 "Skills&MCPs" 标签,点击展开本会话分组 popover)。纯浮动 UI,不修改产品布局。
 
 ---
 
@@ -56,19 +57,29 @@ dsh plugin --profile web remove dsh-skills-mcp-group-manager
 
 | 文件 | 说明 |
 | --- | --- |
-| `lib/index.js` | Host 半插件:状态模型、skill 目录过滤(shadow provider `skill-manager-filter`)、MCP 枚举/启停/增删改(编辑 `cordis.patch.yml`,HMR 热生效)与连接探测、13 个 `manager_*` 工具、RPC 路由 `/plugins/dsh-skills-mcp-group-manager/rpc` |
-| `lib/client.js` | Client 半插件:左侧分组管理面板 + 会话头部开关;MCP 卡片列表(状态徽标/探测/编辑) |
-| `lib/state.js` | 纯状态逻辑(零依赖):分组操作 + MCP 配置的字段级校验 |
-| `lib/store.js` | 分组状态存储(原子写 + 序列化写链 + 容错读取)+ 共享原子写辅助 |
+| `lib/index.js` | Host 半插件:状态模型、skill 目录过滤(shadow provider `skill-manager-filter`,按会话解析覆写)、MCP 枚举/启停/增删改(编辑 `cordis.patch.yml`,HMR 热生效)与连接探测、15 个 `manager_*` 工具、RPC 路由 `/plugins/dsh-skills-mcp-group-manager/rpc` |
+| `lib/client.js` | Client 半插件:左侧分组管理面板 + 会话头部按会话分组 popover;MCP 卡片列表(状态徽标/探测/编辑) |
+| `lib/state.js` | 纯状态逻辑(零依赖):分组操作、按会话注入集合(`enabledSkillNamesFor`)+ MCP 配置的字段级校验 |
+| `lib/store.js` | 分组与会话覆写状态存储(原子写 + 序列化写链 + 容错读取)+ 共享原子写辅助 |
 | `lib/patch.js` | `cordis.patch.yml` 读写(insert 行 / `{id,name,disabled}` 覆写行,`!!js` 保留,原子写) |
 | `lib/status.js` | 从 loader entries 枚举 MCP 服务器(fiber 相位镜像 + `mcp__<server>__*` 工具计数) |
 | `lib/probe.js` | 独立 MCP 客户端连接探测(`initialize` + `tools/list`,8s 超时,永不抛出) |
 | `scripts/cleanup.mjs` | `postuninstall` 清理脚本 |
 | `cordis.patch.yml` | bundle 补丁,把插件行插入宿主组合 |
 
+## 🧵 按会话分组 / Per-session Groups
+
+默认情况下,所有会话共享全局的「启用分组」设置(管理面板里的勾选)。点击会话头部的 **Skills&MCPs** 按钮可展开本会话的分组 popover:
+
+- **跟随全局 / Follow global**(默认)— 会话使用全局启用分组的并集;全局勾选变化立即生效。
+- **取消勾选「跟随全局」后**,该会话脱离全局,独立选择启用哪些分组;覆写值是显式的组 id 集合(空选择 = 该会话不注入任何分组 skill)。覆写与全局开关完全解耦:即使某分组被全局停用,会话覆写中勾选它仍会注入其 skill。
+- 覆写只影响本会话,其他会话不受影响;重新勾选「跟随全局」即删除覆写、恢复全局行为。
+- 覆写按会话 id 存在 `state.json` 的 `sessions` 段;会话 resume 沿用同一 id(设置保留),fork 出的新会话是新 id(跟随全局,不继承覆写)。
+- 模型也可通过工具操作自己所在的会话:`manager_session_get`(查看覆写与生效分组)、`manager_session_set`(`enabledGroupIds: string[] | null`,`null` = 回到跟随全局)。
+
 ## 🛠️ 工具 / Tools
 
-`manager_groups_list/create/delete/rename/set_enabled/add_skill/remove_skill`、`manager_skills_list`、`manager_mcp_list/toggle/add/update/remove`(语义 = 编辑 `cordis.patch.yml`)。连接探测仅走 RPC(`manager.mcp.probe`),不进工具面。
+`manager_groups_list/create/delete/rename/set_enabled/add_skill/remove_skill`、`manager_skills_list`、`manager_session_get/set`(作用于调用方会话)、`manager_mcp_list/toggle/add/update/remove`(语义 = 编辑 `cordis.patch.yml`)。连接探测仅走 RPC(`manager.mcp.probe`),不进工具面。
 
 ## ⚠️ Breaking change(0.3.x → 0.4.0)
 

@@ -9,6 +9,7 @@ import {
   SERVER_NAME_PATTERN,
   addSkillsToGroup,
   enabledSkillNames,
+  enabledSkillNamesFor,
   groupById,
   isValidServerName,
   pickServerConfig,
@@ -42,6 +43,45 @@ test('enabledSkillNames: disabled groups contribute nothing', () => {
 
 test('enabledSkillNames: empty state yields empty set', () => {
   assert.equal(enabledSkillNames(emptyState()).size, 0);
+});
+
+const sessionState = () => ({
+  groups: [
+    { id: 'a', name: 'A', enabled: true, skills: ['skill-one'] },
+    { id: 'b', name: 'B', enabled: false, skills: ['skill-two'] },
+  ],
+  sessions: {},
+});
+
+test('enabledSkillNamesFor: no override follows the global union', () => {
+  const state = sessionState();
+  assert.deepEqual([...enabledSkillNamesFor(state, 's1')], ['skill-one']);
+  // a state without the sessions key at all (legacy shape) also follows
+  assert.deepEqual([...enabledSkillNamesFor({ groups: state.groups }, 's1')], ['skill-one']);
+});
+
+test('enabledSkillNamesFor: an override replaces the global selection', () => {
+  const state = sessionState();
+  state.sessions.s1 = { enabledGroupIds: ['a'] };
+  assert.deepEqual([...enabledSkillNamesFor(state, 's1')], ['skill-one']);
+  // other sessions still follow the global union
+  assert.deepEqual([...enabledSkillNamesFor(state, 's2')], ['skill-one']);
+  // the override detaches from global toggles: a globally disabled group
+  // listed in the override still contributes its skills
+  state.sessions.s3 = { enabledGroupIds: ['b'] };
+  assert.deepEqual([...enabledSkillNamesFor(state, 's3')], ['skill-two']);
+});
+
+test('enabledSkillNamesFor: an empty override injects nothing', () => {
+  const state = sessionState();
+  state.sessions.s1 = { enabledGroupIds: [] };
+  assert.equal(enabledSkillNamesFor(state, 's1').size, 0);
+});
+
+test('enabledSkillNamesFor: deleted group ids are dropped on read', () => {
+  const state = sessionState();
+  state.sessions.s1 = { enabledGroupIds: ['a', 'ghost'] };
+  assert.deepEqual([...enabledSkillNamesFor(state, 's1')], ['skill-one']);
 });
 
 test('groupById finds entries and misses cleanly', () => {
@@ -134,14 +174,24 @@ test('pickServerConfig: picks known fields verbatim, defaults transport', () => 
 test('snapshotState: fresh JSON copies, no shared references', () => {
   const state = {
     groups: [{ id: 'g1', name: 'G1', enabled: true, skills: ['s1'] }],
+    sessions: { sess1: { enabledGroupIds: ['g1'] } },
   };
   const snap = snapshotState(state);
   assert.deepEqual(snap, state);
   assert.notEqual(snap.groups, state.groups);
   assert.notEqual(snap.groups[0].skills, state.groups[0].skills);
+  assert.notEqual(snap.sessions, state.sessions);
+  assert.notEqual(snap.sessions.sess1.enabledGroupIds, state.sessions.sess1.enabledGroupIds);
   // mutating the snapshot must not touch the source
   snap.groups[0].skills.push('s2');
+  snap.sessions.sess1.enabledGroupIds.push('ghost');
   assert.deepEqual(state.groups[0].skills, ['s1']);
+  assert.deepEqual(state.sessions.sess1.enabledGroupIds, ['g1']);
+});
+
+test('snapshotState: a state without the sessions key projects an empty map', () => {
+  const snap = snapshotState({ groups: [] });
+  assert.deepEqual(snap, { groups: [], sessions: {} });
 });
 
 test('addSkillsToGroup: appends multiple names in one immutable update, deduped', () => {
