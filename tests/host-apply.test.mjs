@@ -129,6 +129,35 @@ test('apply() registers all 15 manager_* tools synchronously', () => {
   assert.equal(tools.length, 15, 'exactly 15 tools (probe is RPC-only, not a tool)');
 });
 
+// The dsh-tools registry validates every registered schema against a subset:
+// `type` must be a single string (nullable is expressed as oneOf). A type
+// array here fails plugin LOAD, not just the tool call — guard the final
+// converted schemas so this boot-breaking class cannot regress.
+test('registered tool schemas stay inside the dsh-tools subset (no type arrays)', () => {
+  const { ctx, tools } = fakeCtx();
+  apply(ctx, {});
+  assert.ok(tools.length > 0);
+  const violations = [];
+  const walk = (node, path) => {
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => walk(item, `${path}[${index}]`));
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'type' && Array.isArray(value)) {
+        violations.push(`${path}.type is an array (${value.join('|')})`);
+      }
+      walk(value, `${path}.${key}`);
+    }
+  };
+  for (const tool of tools) {
+    walk(tool.parameters, `${tool.name}.parameters`);
+    if (tool.output?.schema !== undefined) walk(tool.output.schema, `${tool.name}.output`);
+  }
+  assert.deepEqual(violations, []);
+});
+
 test('apply() wires lifecycle listeners and effects synchronously', () => {
   const { ctx, effects, listeners } = fakeCtx();
   apply(ctx, {});
