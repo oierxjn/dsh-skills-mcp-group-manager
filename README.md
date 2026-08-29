@@ -4,12 +4,15 @@
 
 > A DSH plugin that groups Skills, filters the model skill catalog, toggles MCP servers independently, and manages everything from a left panel.
 
-[![npm version](https://img.shields.io/npm/v/dsh-skills-mcp-group-manager.svg?style=flat-square&logo=npm)](https://www.npmjs.com/package/dsh-skills-mcp-group-manager)
-[![npm downloads](https://img.shields.io/npm/dm/dsh-skills-mcp-group-manager.svg?style=flat-square&logo=npm)](https://www.npmjs.com/package/dsh-skills-mcp-group-manager)
 [![license](https://img.shields.io/npm/l/dsh-skills-mcp-group-manager.svg?style=flat-square)](LICENSE)
-[![GitHub release](https://img.shields.io/github/v/release/SeverusZh/dsh-skills-mcp-group-manager?style=flat-square&logo=github)](https://github.com/SeverusZh/dsh-skills-mcp-group-manager/releases)
-[![GitHub stars](https://img.shields.io/github/stars/SeverusZh/dsh-skills-mcp-group-manager?style=flat-square&logo=github)](https://github.com/SeverusZh/dsh-skills-mcp-group-manager)
+[![GitHub release](https://img.shields.io/github/v/release/oierxjn/dsh-skills-mcp-group-manager?style=flat-square&logo=github)](https://github.com/oierxjn/dsh-skills-mcp-group-manager/releases)
+[![GitHub stars](https://img.shields.io/github/stars/oierxjn/dsh-skills-mcp-group-manager?style=flat-square&logo=github)](https://github.com/oierxjn/dsh-skills-mcp-group-manager/stargazers)
 [![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen?style=flat-square&logo=node.js)](package.json)
+
+---
+
+> [!IMPORTANT]
+> **Fork 维护声明 / Fork notice** — 本仓库 fork 自 [SeverusZh/dsh-skills-mcp-group-manager](https://github.com/SeverusZh/dsh-skills-mcp-group-manager),自 0.4.0 起由 [oierxjn](https://github.com/oierxjn) **自行维护,不再向上游提交 PR**。向上游同步用 `git fetch upstream`(remote `upstream` 指向上游);问题与 PR 请提到本仓库。
 
 ---
 
@@ -26,13 +29,18 @@
 ## 📦 安装 / Install
 
 ```bash
-# 单命令安装(无需其他步骤)
-dsh plugin --profile web add dsh-skills-mcp-group-manager
+# 从本 fork 的 git 仓库安装(dsh plugin add 底层是 pnpm add,支持 git URL)
+dsh plugin --profile web add https://github.com/oierxjn/dsh-skills-mcp-group-manager
+
+# 或本地开发时从克隆目录 link: 安装
+dsh plugin --profile web add link:E:\path\to\dsh-skills-mcp-group-manager
 
 # 重启 web profile 进程后生效(当前 GUI 由 dsh web 提供,重启后刷新页面)
 ```
 
-> **为什么无需额外步骤?** 宿主半插件保持纯手写 JS、零构建;仅有的两个运行时依赖(`js-yaml`、`@modelcontextprotocol/sdk`,见 `dependencies`)随 registry 安装自动落盘,且均为惰性加载——即使 `link:` 安装缺少 node_modules,插件与分组功能仍可启动,仅 MCP 编辑/探测会报出明确错误。
+> **为什么无需额外步骤?** 宿主半插件保持纯手写 JS、零构建;仅有的两个运行时依赖(`js-yaml`、`@modelcontextprotocol/sdk`,见 `dependencies`)在安装时由 pnpm 自动落盘,且均为惰性加载——即使 `link:` 安装缺少 node_modules,插件与分组功能仍可启动,仅 MCP 编辑/探测会报出明确错误。
+
+> **npm 包说明** 本仓库是自行维护的 fork,不发布到 npm registry;`dsh plugin add dsh-skills-mcp-group-manager`(npm 包名)安装的是上游版本,不含本 fork 的改动。
 
 ## 🗑️ 卸载 / Uninstall(数据随插件一并删除)
 
@@ -73,4 +81,4 @@ dsh plugin --profile web remove dsh-skills-mcp-group-manager
 
 ## 📄 License
 
-[MIT](LICENSE) © [SeverusZh](https://github.com/SeverusZh)
+[MIT](LICENSE) © [SeverusZh](https://github.com/SeverusZh)(上游原作者),fork 由 [oierxjn](https://github.com/oierxjn) 维护
