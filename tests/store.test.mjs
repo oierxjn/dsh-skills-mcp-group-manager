@@ -23,7 +23,7 @@ test('load: missing file yields empty state', async () => {
   try {
     const store = createStateStore({ dshHome: home });
     const state = await store.load();
-    assert.deepEqual(state, { groups: [], mcp: [] });
+    assert.deepEqual(state, { groups: [] });
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -36,7 +36,7 @@ test('load: corrupt file yields empty state', async () => {
     await writeFile(join(dir, 'state.json'), '{not json', 'utf8').catch(() => {});
     const store = createStateStore({ dshHome: home });
     const state = await store.load();
-    assert.deepEqual(state, { groups: [], mcp: [] });
+    assert.deepEqual(state, { groups: [] });
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -71,20 +71,22 @@ test('normalizeState: drops malformed entries, keeps valid ones', () => {
       { id: 42, name: 'bad', enabled: true, skills: [] },
       { name: 'no-id', enabled: true, skills: [] },
     ],
-    mcp: [
-      { serverName: 'srv', transport: 'stdio', command: 'npx', enabled: true, addedByUser: true },
-      { serverName: 'bad', transport: 'carrier-pigeon', enabled: true, addedByUser: true },
-    ],
   };
   const state = normalizeState(raw);
   assert.equal(state.groups.length, 1);
   assert.equal(state.groups[0].id, 'g1');
-  assert.equal(state.mcp.length, 1);
-  assert.equal(state.mcp[0].serverName, 'srv');
+});
+
+test('normalizeState: the legacy mcp section is dropped (MCP lives in cordis.patch.yml)', () => {
+  const state = normalizeState({
+    groups: [],
+    mcp: [{ serverName: 'srv', transport: 'stdio', command: 'npx', enabled: true, addedByUser: true }],
+  });
+  assert.deepEqual(state, { groups: [] });
 });
 
 test('normalizeState: non-object input yields empty state', () => {
-  assert.deepEqual(normalizeState(null), { groups: [], mcp: [] });
-  assert.deepEqual(normalizeState('nope'), { groups: [], mcp: [] });
-  assert.deepEqual(normalizeState(undefined), { groups: [], mcp: [] });
+  assert.deepEqual(normalizeState(null), { groups: [] });
+  assert.deepEqual(normalizeState('nope'), { groups: [] });
+  assert.deepEqual(normalizeState(undefined), { groups: [] });
 });

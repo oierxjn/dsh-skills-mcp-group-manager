@@ -5,21 +5,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  ENTRY_ID_PATTERN,
   SERVER_NAME_PATTERN,
   addSkillsToGroup,
-  denyNamesForDisabled,
   enabledSkillNames,
   groupById,
   isValidServerName,
-  mcpClientConfig,
-  mcpServerByName,
+  pickServerConfig,
   removeSkillsFromGroup,
   snapshotState,
-  toolsOfServer,
-  validateMcpServerInput,
+  validateMcpConfig,
 } from '../lib/state.js';
 
-const emptyState = () => ({ groups: [], mcp: [] });
+const emptyState = () => ({ groups: [] });
 
 test('enabledSkillNames: union across enabled groups, deduped', () => {
   const state = {
@@ -27,7 +25,6 @@ test('enabledSkillNames: union across enabled groups, deduped', () => {
       { id: 'a', name: 'A', enabled: true, skills: ['skill-one', 'skill-two'] },
       { id: 'b', name: 'B', enabled: true, skills: ['skill-two', 'skill-three'] },
     ],
-    mcp: [],
   };
   const set = enabledSkillNames(state);
   assert.deepEqual([...set].sort(), ['skill-one', 'skill-three', 'skill-two']);
@@ -39,7 +36,6 @@ test('enabledSkillNames: disabled groups contribute nothing', () => {
       { id: 'a', name: 'A', enabled: false, skills: ['skill-one'] },
       { id: 'b', name: 'B', enabled: true, skills: ['skill-two'] },
     ],
-    mcp: [],
   };
   assert.deepEqual([...enabledSkillNames(state)], ['skill-two']);
 });
@@ -48,58 +44,12 @@ test('enabledSkillNames: empty state yields empty set', () => {
   assert.equal(enabledSkillNames(emptyState()).size, 0);
 });
 
-test('groupById / mcpServerByName find entries and miss cleanly', () => {
+test('groupById finds entries and misses cleanly', () => {
   const state = {
     groups: [{ id: 'g1', name: 'G1', enabled: true, skills: [] }],
-    mcp: [{ serverName: 'srv', transport: 'stdio', enabled: true, addedByUser: true }],
   };
   assert.equal(groupById(state, 'g1').name, 'G1');
   assert.equal(groupById(state, 'nope'), undefined);
-  assert.equal(mcpServerByName(state, 'srv').serverName, 'srv');
-  assert.equal(mcpServerByName(state, 'nope'), undefined);
-});
-
-test('toolsOfServer: mcp__<server>__ prefix matching', () => {
-  const schemas = [
-    { name: 'mcp__github__list_issues' },
-    { name: 'mcp__github__create_issue' },
-    { name: 'mcp__other__tool' },
-    { name: 'manager_groups_list' },
-  ];
-  assert.deepEqual(toolsOfServer(schemas, 'github'), ['mcp__github__list_issues', 'mcp__github__create_issue']);
-  assert.deepEqual(toolsOfServer(schemas, 'unknown'), []);
-});
-
-test('denyNamesForDisabled: exact live names of disabled servers only', () => {
-  const state = {
-    groups: [],
-    mcp: [
-      { serverName: 'github', enabled: false, addedByUser: false },
-      { serverName: 'alive', enabled: true, addedByUser: true },
-    ],
-  };
-  const schemas = [
-    { name: 'mcp__github__list_issues' },
-    { name: 'mcp__alive__tool' },
-    { name: 'manager_groups_list' },
-  ];
-  assert.deepEqual(denyNamesForDisabled(state, schemas), ['mcp__github__list_issues']);
-});
-
-test('denyNamesForDisabled: offline disabled server (0 live tools) is skipped', () => {
-  const state = {
-    groups: [],
-    mcp: [{ serverName: 'offline', enabled: false, addedByUser: false }],
-  };
-  assert.deepEqual(denyNamesForDisabled(state, [{ name: 'manager_groups_list' }]), []);
-});
-
-test('denyNamesForDisabled: all enabled yields empty deny', () => {
-  const state = {
-    groups: [],
-    mcp: [{ serverName: 'github', enabled: true, addedByUser: false }],
-  };
-  assert.deepEqual(denyNamesForDisabled(state, [{ name: 'mcp__github__x' }]), []);
 });
 
 test('isValidServerName: domain matches dsh-mcp-client', () => {
@@ -112,71 +62,90 @@ test('isValidServerName: domain matches dsh-mcp-client', () => {
   assert.ok(!isValidServerName(42));
 });
 
-test('validateMcpServerInput: stdio requires command; normalizes args/env', () => {
-  const out = validateMcpServerInput({
-    serverName: 'srv',
+test('validateMcpConfig: valid stdio and streamable-http configs pass', () => {
+  assert.deepEqual(validateMcpConfig('mcp-github', {
+    serverName: 'github',
     transport: 'stdio',
     command: 'npx',
     args: ['-y', 'pkg'],
     env: { KEY: 'value' },
+    cwd: '/tmp',
+  }), {});
+  assert.deepEqual(validateMcpConfig('mcp-x', {
+    serverName: 'srv',
+    transport: 'streamable-http',
+    url: 'https://x/mcp',
+    headers: { Authorization: 'Bearer t' },
+    toolCallTimeoutMs: 5000,
+  }), {});
+});
+
+test('validateMcpConfig: field-level errors keyed by field', () => {
+  const errors = validateMcpConfig('bad id!', {
+    serverName: 'has space',
+    transport: 'stdio',
+    args: [1],
+    cwd: 42,
+    env: { K: 1 },
+    headers: 'nope',
+    toolCallTimeoutMs: 0,
   });
-  assert.deepEqual(out, {
+  assert.match(errors.id, /Entry id/);
+  assert.match(errors.serverName, /serverName/);
+  assert.match(errors.command, /command/);
+  assert.match(errors.args, /args/);
+  assert.match(errors.cwd, /cwd/);
+  assert.match(errors.env, /env/);
+  assert.match(errors.headers, /headers/);
+  assert.match(errors.toolCallTimeoutMs, /toolCallTimeoutMs/);
+  assert.equal(errors.url, undefined, 'stdio does not require url');
+});
+
+test('validateMcpConfig: streamable-http requires an http(s) URL', () => {
+  assert.match(validateMcpConfig('mcp-x', { serverName: 'srv', transport: 'streamable-http' }).url, /URL/);
+  assert.match(validateMcpConfig('mcp-x', { serverName: 'srv', transport: 'streamable-http', url: 'ftp://x' }).url, /URL/);
+  assert.equal(ENTRY_ID_PATTERN.source, '^[A-Za-z0-9_-]{1,64}$');
+});
+
+test('pickServerConfig: picks known fields verbatim, defaults transport', () => {
+  const config = pickServerConfig({
+    id: 'ignored',
     serverName: 'srv',
     transport: 'stdio',
     command: 'npx',
-    args: ['-y', 'pkg'],
-    env: { KEY: 'value' },
+    args: ['a'],
+    env: { K: 'v' },
+    url: 'https://kept-verbatim',
+    unknownField: 'dropped',
   });
-});
-
-test('validateMcpServerInput: streamable-http requires url', () => {
-  const out = validateMcpServerInput({ serverName: 'srv', transport: 'streamable-http', url: 'https://x' });
-  assert.deepEqual(out, { serverName: 'srv', transport: 'streamable-http', url: 'https://x' });
-});
-
-test('validateMcpServerInput: rejects bad input', () => {
-  assert.throws(() => validateMcpServerInput({ serverName: 'bad name', transport: 'stdio', command: 'x' }), /serverName/);
-  assert.throws(() => validateMcpServerInput({ serverName: 'srv', transport: 'bogus' }), /transport/);
-  assert.throws(() => validateMcpServerInput({ serverName: 'srv', transport: 'stdio' }), /command/);
-  assert.throws(() => validateMcpServerInput({ serverName: 'srv', transport: 'streamable-http' }), /url/);
-  assert.throws(() => validateMcpServerInput({ serverName: 'srv', transport: 'stdio', command: 'x', args: [1] }), /args/);
-  assert.throws(() => validateMcpServerInput({ serverName: 'srv', transport: 'stdio', command: 'x', env: { K: 1 } }), /env/);
-  assert.throws(() => validateMcpServerInput(null), /object/);
-});
-
-test('mcpClientConfig: stdio and http config shapes', () => {
-  const stdio = mcpClientConfig({ serverName: 'srv', transport: 'stdio', command: 'npx', args: ['a'], env: { K: 'v' } });
-  assert.equal(stdio.transport, 'stdio');
-  assert.equal(stdio.command, 'npx');
-  assert.deepEqual(stdio.args, ['a']);
-  assert.deepEqual(stdio.env, { K: 'v' });
-  assert.equal(stdio.failOnStartupError, false);
-  assert.equal(stdio.toolCallTimeoutMs, 60000);
-
-  const http = mcpClientConfig({ serverName: 'srv', transport: 'streamable-http', url: 'https://x' });
-  assert.equal(http.transport, 'streamable-http');
-  assert.equal(http.url, 'https://x');
-  assert.deepEqual(http.headers, {});
+  assert.deepEqual(config, {
+    serverName: 'srv',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['a'],
+    env: { K: 'v' },
+    url: 'https://kept-verbatim',
+  });
+  // Unknown transport coerces to streamable-http (validateMcpConfig then
+  // requires the url, same as the dsh-mcp-client schema default).
+  assert.equal(pickServerConfig({ serverName: 'srv', transport: 'bogus' }).transport, 'streamable-http');
 });
 
 test('snapshotState: fresh JSON copies, no shared references', () => {
   const state = {
     groups: [{ id: 'g1', name: 'G1', enabled: true, skills: ['s1'] }],
-    mcp: [{ serverName: 'srv', transport: 'stdio', command: 'npx', args: ['a'], env: { K: 'v' }, enabled: true, addedByUser: true }],
   };
   const snap = snapshotState(state);
   assert.deepEqual(snap, state);
   assert.notEqual(snap.groups, state.groups);
   assert.notEqual(snap.groups[0].skills, state.groups[0].skills);
-  assert.notEqual(snap.mcp[0].args, state.mcp[0].args);
-  assert.notEqual(snap.mcp[0].env, state.mcp[0].env);
   // mutating the snapshot must not touch the source
   snap.groups[0].skills.push('s2');
   assert.deepEqual(state.groups[0].skills, ['s1']);
 });
 
 test('addSkillsToGroup: appends multiple names in one immutable update, deduped', () => {
-  const state = { groups: [{ id: 'g1', name: 'G1', enabled: true, skills: ['a'] }], mcp: [] };
+  const state = { groups: [{ id: 'g1', name: 'G1', enabled: true, skills: ['a'] }] };
   const next = addSkillsToGroup(state, 'g1', ['b', 'c', 'a']);
   assert.deepEqual(next.groups[0].skills, ['a', 'b', 'c']);
   // duplicates WITHIN the input array are also dropped
@@ -190,7 +159,7 @@ test('addSkillsToGroup: appends multiple names in one immutable update, deduped'
 });
 
 test('removeSkillsFromGroup: removes multiple names in one immutable update', () => {
-  const state = { groups: [{ id: 'g1', name: 'G1', enabled: true, skills: ['a', 'b', 'c'] }], mcp: [] };
+  const state = { groups: [{ id: 'g1', name: 'G1', enabled: true, skills: ['a', 'b', 'c'] }] };
   const next = removeSkillsFromGroup(state, 'g1', ['a', 'c']);
   assert.deepEqual(next.groups[0].skills, ['b']);
   assert.deepEqual(state.groups[0].skills, ['a', 'b', 'c']);

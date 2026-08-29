@@ -49,7 +49,7 @@ function fakeCtx() {
   return { ctx, tools, toolDisposers, effects, listeners, providers };
 }
 
-test('apply() registers all 12 manager_* tools synchronously', () => {
+test('apply() registers all 13 manager_* tools synchronously', () => {
   const { ctx, tools } = fakeCtx();
   const result = apply(ctx, {});
   // The contract: after apply() RETURNS (not after a microtask), every tool
@@ -61,19 +61,23 @@ test('apply() registers all 12 manager_* tools synchronously', () => {
     'manager_groups_list', 'manager_groups_create', 'manager_groups_delete',
     'manager_groups_rename', 'manager_groups_set_enabled', 'manager_groups_add_skill',
     'manager_groups_remove_skill', 'manager_skills_list', 'manager_mcp_list',
-    'manager_mcp_toggle', 'manager_mcp_add', 'manager_mcp_remove',
+    'manager_mcp_toggle', 'manager_mcp_add', 'manager_mcp_update', 'manager_mcp_remove',
   ]) {
     assert.ok(names.includes(expected), `tool ${expected} registered synchronously`);
   }
+  assert.equal(tools.length, 13, 'exactly 13 tools (probe is RPC-only, not a tool)');
 });
 
 test('apply() wires lifecycle listeners and effects synchronously', () => {
   const { ctx, effects, listeners } = fakeCtx();
   apply(ctx, {});
   const listenerNames = listeners.map((entry) => entry.name);
-  for (const expected of ['agent/created', 'agent/disposed', 'tools/change']) {
+  for (const expected of ['agent/created', 'agent/disposed']) {
     assert.ok(listenerNames.includes(expected), `listener ${expected} registered synchronously`);
   }
+  // The tools/change listener existed only to re-apply MCP restrictions;
+  // with the patch-file approach the loader HMR owns server lifecycles.
+  assert.ok(!listenerNames.includes('tools/change'), 'no tools/change restrict wiring');
   const effectLabels = effects.map((entry) => entry.label);
   assert.ok(effectLabels.includes('mcp-skill-manager: agent-layer cleanup'), 'cleanup effect registered synchronously');
 });
