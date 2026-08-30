@@ -14,6 +14,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { apply } from '../lib/index.js';
 
 /** Minimal fake ctx capturing every registration the host half performs. */
@@ -24,6 +27,7 @@ function fakeCtx() {
   const listeners = [];
   const providers = [];
   const schemas = [];
+  const routes = [];
   const ctx = {
     logger: { warn() {}, error() {}, info() {} },
     tools: {
@@ -43,13 +47,69 @@ function fakeCtx() {
     loader: { entries() { return []; } },
     on(name, listener) { listeners.push({ name, listener }); return () => {}; },
     effect(callback, label) { effects.push({ callback, label }); return () => {}; },
-    get() { return undefined; },
+    get(key) {
+      if (key === 'webServer' || key === 'httpServer') {
+        return { register(route) { routes.push(route); return () => {}; } };
+      }
+      return undefined;
+    },
     plugin() { throw new Error('ctx.plugin should not be called in this test'); },
   };
-  return { ctx, tools, toolDisposers, effects, listeners, providers };
+  return { ctx, tools, toolDisposers, effects, listeners, providers, routes };
 }
 
-test('apply() registers all 13 manager_* tools synchronously', () => {
+/**
+ * Run fn with DSH_HOME pointed at a temp dir (the host plugin persists its
+ * state store there; without this, session writes would touch ~/.dsh).
+ */
+async function withTempHome(fn) {
+  const home = await mkdtemp(join(tmpdir(), 'msm-host-apply-'));
+  const oldHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  try {
+    await fn(home);
+  } finally {
+    process.env.DSH_HOME = oldHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}
+
+/** Invoke the registered RPC route with a JSON body; returns the envelope. */
+async function callRpc(routes, method, args) {
+  assert.equal(routes.length, 1, 'exactly one RPC route registered');
+  const req = [Buffer.from(JSON.stringify({ method, args: args ?? {} }))];
+  let body;
+  const res = { writeHead() {}, end(chunk) { body = chunk; } };
+  await routes[0].handler(req, res);
+  return JSON.parse(body);
+}
+
+/**
+ * Fake live agent: agent.id IS the session id. registerProvider runs the
+ * provider factory synchronously (as the real skills registry does) and
+ * records the control so tests can observe invalidate() calls.
+ */
+function fakeAgent(id, invalidated) {
+  const agent = {
+    id,
+    providers: [],
+    ctx: {
+      get(key) {
+        if (key !== 'skills') return undefined;
+        return {
+          registerProvider(factory) {
+            const control = { invalidate: () => invalidated.push(id) };
+            agent.providers.push(factory(control));
+            return () => {};
+          },
+        };
+      },
+    },
+  };
+  return agent;
+}
+
+test('apply() registers all 15 manager_* tools synchronously', () => {
   const { ctx, tools } = fakeCtx();
   const result = apply(ctx, {});
   // The contract: after apply() RETURNS (not after a microtask), every tool
@@ -60,12 +120,42 @@ test('apply() registers all 13 manager_* tools synchronously', () => {
   for (const expected of [
     'manager_groups_list', 'manager_groups_create', 'manager_groups_delete',
     'manager_groups_rename', 'manager_groups_set_enabled', 'manager_groups_add_skill',
-    'manager_groups_remove_skill', 'manager_skills_list', 'manager_mcp_list',
+    'manager_groups_remove_skill', 'manager_skills_list', 'manager_session_get',
+    'manager_session_set', 'manager_mcp_list',
     'manager_mcp_toggle', 'manager_mcp_add', 'manager_mcp_update', 'manager_mcp_remove',
   ]) {
     assert.ok(names.includes(expected), `tool ${expected} registered synchronously`);
   }
-  assert.equal(tools.length, 13, 'exactly 13 tools (probe is RPC-only, not a tool)');
+  assert.equal(tools.length, 15, 'exactly 15 tools (probe is RPC-only, not a tool)');
+});
+
+// The dsh-tools registry validates every registered schema against a subset:
+// `type` must be a single string (nullable is expressed as oneOf). A type
+// array here fails plugin LOAD, not just the tool call — guard the final
+// converted schemas so this boot-breaking class cannot regress.
+test('registered tool schemas stay inside the dsh-tools subset (no type arrays)', () => {
+  const { ctx, tools } = fakeCtx();
+  apply(ctx, {});
+  assert.ok(tools.length > 0);
+  const violations = [];
+  const walk = (node, path) => {
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => walk(item, `${path}[${index}]`));
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'type' && Array.isArray(value)) {
+        violations.push(`${path}.type is an array (${value.join('|')})`);
+      }
+      walk(value, `${path}.${key}`);
+    }
+  };
+  for (const tool of tools) {
+    walk(tool.parameters, `${tool.name}.parameters`);
+    if (tool.output?.schema !== undefined) walk(tool.output.schema, `${tool.name}.output`);
+  }
+  assert.deepEqual(violations, []);
 });
 
 test('apply() wires lifecycle listeners and effects synchronously', () => {
@@ -157,4 +247,198 @@ test('tool definitions carry valid raw JSON schemas (required names exist in pro
     check(tool.parameters, `${tool.name}.parameters`);
     if (tool.output?.schema) check(tool.output.schema, `${tool.name}.output`);
   }
+});
+
+test('manager.session.get/set RPC: follow-global, override, empty, unknown id, reset', async () => {
+  await withTempHome(async () => {
+    const { ctx, tools, effects, routes } = fakeCtx();
+    apply(ctx, {});
+    // fakeCtx records effects without running them; the RPC route lives inside
+    // a ctx.effect, so fire it manually (Cordis runs effects at apply time).
+    effects.find((effect) => effect.label === 'mcp-skill-manager: rpc route').callback();
+    const toolMap = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+    const g1 = (await toolMap.manager_groups_create.execute({ name: 'G1' })).id;
+    const g2 = (await toolMap.manager_groups_create.execute({ name: 'G2' })).id;
+
+    // No override: follows the global enabled groups (both enabled by default).
+    let res = await callRpc(routes, 'manager.session.get', { sessionId: 'sess-1' });
+    assert.deepEqual(res.value, { override: null, effectiveGroupIds: [g1, g2] });
+
+    // Explicit override detaches the session.
+    res = await callRpc(routes, 'manager.session.set', { sessionId: 'sess-1', enabledGroupIds: [g1] });
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.value.override, { enabledGroupIds: [g1] });
+    assert.deepEqual(res.value.effectiveGroupIds, [g1]);
+
+    // Empty array = inject nothing (NOT follow-global).
+    res = await callRpc(routes, 'manager.session.set', { sessionId: 'sess-1', enabledGroupIds: [] });
+    assert.deepEqual(res.value.override, { enabledGroupIds: [] });
+    assert.deepEqual(res.value.effectiveGroupIds, []);
+
+    // Unknown group id: rejected, previous override untouched.
+    res = await callRpc(routes, 'manager.session.set', { sessionId: 'sess-1', enabledGroupIds: ['ghost'] });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'not-found');
+    res = await callRpc(routes, 'manager.session.get', { sessionId: 'sess-1' });
+    assert.deepEqual(res.value.override, { enabledGroupIds: [] });
+
+    // null returns to follow-global (the sessions entry is removed).
+    res = await callRpc(routes, 'manager.session.set', { sessionId: 'sess-1', enabledGroupIds: null });
+    assert.deepEqual(res.value, { override: null, effectiveGroupIds: [g1, g2] });
+
+    // Malformed args are rejected with invalid-args.
+    res = await callRpc(routes, 'manager.session.set', { sessionId: 'sess-1', enabledGroupIds: 'g1' });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'invalid-args');
+    res = await callRpc(routes, 'manager.session.get', {});
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'invalid-args');
+  });
+});
+
+test('manager_session_* tools are scoped to the calling session (exec.agent.id)', async () => {
+  await withTempHome(async () => {
+    const { ctx, tools } = fakeCtx();
+    apply(ctx, {});
+    const toolMap = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+    const g1 = (await toolMap.manager_groups_create.execute({ name: 'G1' })).id;
+    const g2 = (await toolMap.manager_groups_create.execute({ name: 'G2' })).id;
+
+    const agentA = { id: 'sess-a' };
+    const agentB = { id: 'sess-b' };
+    let value = await toolMap.manager_session_set.execute({ enabledGroupIds: [g2] }, { agent: agentA });
+    assert.deepEqual(value.override, { enabledGroupIds: [g2] });
+    assert.deepEqual(value.effectiveGroupIds, [g2]);
+
+    value = await toolMap.manager_session_get.execute({}, { agent: agentA });
+    assert.deepEqual(value.override, { enabledGroupIds: [g2] });
+    // Another session is unaffected and still follows the global toggles.
+    value = await toolMap.manager_session_get.execute({}, { agent: agentB });
+    assert.deepEqual(value, { override: null, effectiveGroupIds: [g1, g2] });
+
+    // Output values stay within the declared output schema.
+    const schema = toolMap.manager_session_get.output.schema;
+    assert.ok(schema.properties.override && schema.properties.effectiveGroupIds);
+    for (const req of schema.required) assert.ok(req in value, `schema-required "${req}" present`);
+  });
+});
+
+test('manager_session_* tools: missing exec.agent rejects with a clear error', async () => {
+  await withTempHome(async () => {
+    const { ctx, tools } = fakeCtx();
+    apply(ctx, {});
+    const toolMap = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+    await assert.rejects(
+      toolMap.manager_session_get.execute({}),
+      /require the calling agent context/,
+    );
+    await assert.rejects(
+      toolMap.manager_session_set.execute({ enabledGroupIds: [] }, {}),
+      /require the calling agent context/,
+    );
+  });
+});
+
+test('session override invalidates only the target agent catalog', async () => {
+  await withTempHome(async () => {
+    const invalidated = [];
+    const agentA = fakeAgent('sess-a', invalidated);
+    const agentB = fakeAgent('sess-b', invalidated);
+    const { ctx, tools } = fakeCtx();
+    ctx.agents.list = () => [agentA, agentB];
+    apply(ctx, {});
+    assert.equal(agentA.providers.length, 1);
+    assert.equal(agentB.providers.length, 1);
+    const toolMap = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+    const g1 = (await toolMap.manager_groups_create.execute({ name: 'G1' })).id;
+    assert.deepEqual(invalidated.sort(), ['sess-a', 'sess-b'], 'group CRUD refreshes every catalog');
+    invalidated.length = 0;
+
+    // A session override touches only that session's shadow control.
+    await toolMap.manager_session_set.execute({ enabledGroupIds: [g1] }, { agent: { id: 'sess-a' } });
+    assert.deepEqual(invalidated, ['sess-a'], 'override invalidates the target agent only');
+
+    // ...and the shadow list() actually resolves per-session: agent A injects
+    // only group g1's skills, agent B (no override) the global union.
+    await toolMap.manager_groups_add_skill.execute({ id: g1, skill: 'skill-one' });
+    invalidated.length = 0;
+    ctx.skills.list = async () => [
+      { name: 'skill-one', description: '', invocation: { modelInvocable: true, userInvocable: true }, source: 'test' },
+      { name: 'skill-two', description: '', invocation: { modelInvocable: true, userInvocable: true }, source: 'test' },
+    ];
+    const listA = await agentA.providers[0].list({ cwd: '.', signal: new AbortController().signal });
+    const listB = await agentB.providers[0].list({ cwd: '.', signal: new AbortController().signal });
+    assert.deepEqual(
+      listA.map((s) => [s.name, s.invocation.modelInvocable]),
+      [['skill-one', true], ['skill-two', false]],
+      'overridden session injects only its override groups',
+    );
+    assert.deepEqual(
+      listB.map((s) => [s.name, s.invocation.modelInvocable]),
+      [['skill-one', true], ['skill-two', false]],
+      'follow-global session with one enabled group injects that group only',
+    );
+
+    // Resetting the override (null) also invalidates only the target agent,
+    // and the session then follows the global union again.
+    await toolMap.manager_session_set.execute({ enabledGroupIds: null }, { agent: { id: 'sess-a' } });
+    assert.deepEqual(invalidated, ['sess-a']);
+    const value = await toolMap.manager_session_get.execute({}, { agent: { id: 'sess-a' } });
+    assert.equal(value.override, null);
+  });
+});
+
+
+// Regression for the Copilot-flagged gap: the shadow provider's
+// AsyncLocalStorage re-entrancy guard had no coverage - a broken guard
+// would recurse infinitely inside the real registry's nested collect
+// while every existing test (whose skills.list stub ignores scope) stays
+// green. This test models the real registry: listing with the requesting
+// scope walks [global, preset, agent], and reaching the agent layer
+// re-invokes the shadow provider through the same async chain.
+test('shadow list survives its own nested registry pass (scope re-entrancy)', async () => {
+  await withTempHome(async () => {
+    const invalidated = [];
+    const agent = fakeAgent('sess-a', invalidated);
+    const { ctx, tools } = fakeCtx();
+    ctx.agents.list = () => [agent];
+    apply(ctx, {});
+    assert.equal(agent.providers.length, 1);
+    const shadow = agent.providers[0];
+
+    const toolMap = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+    const g1 = (await toolMap.manager_groups_create.execute({ name: 'G1' })).id;
+    await toolMap.manager_groups_add_skill.execute({ id: g1, skill: 'skill-one' });
+
+    // The preset standing layer's unfiltered catalog.
+    const presetCandidates = [
+      { name: 'skill-one', description: 'one', invocation: { modelInvocable: true, userInvocable: true }, source: 'preset', rank: 100, provider: 'filesystem' },
+      { name: 'skill-two', description: 'two', invocation: { modelInvocable: true, userInvocable: true }, source: 'preset', rank: 100, provider: 'filesystem' },
+    ];
+
+    const requested = { cwd: '.', signal: new AbortController().signal, scope: agent };
+    let nestedPasses = 0;
+    const reentrantResults = [];
+    ctx.skills.list = async (options) => {
+      assert.equal(options.scope, requested.scope, 'the shadow must forward the requesting scope');
+      nestedPasses += 1;
+      assert.ok(nestedPasses <= 2, `runaway recursion: ${nestedPasses} nested passes`);
+      // The registry reaches the agent layer and re-invokes the shadow
+      // provider; the guard must make that re-entrant pass contribute
+      // nothing so THIS call resolves the unfiltered catalog.
+      const fromAgentLayer = await shadow.list(options);
+      reentrantResults.push(fromAgentLayer);
+      return [...presetCandidates, ...fromAgentLayer];
+    };
+
+    // Outermost entry: the registry reaching the agent layer.
+    const listed = await shadow.list(requested);
+    assert.equal(nestedPasses, 1, 'exactly one nested registry pass (no recursion)');
+    assert.deepEqual(reentrantResults, [[]], 'the re-entrant shadow pass yields []');
+    assert.deepEqual(
+      listed.map((skill) => [skill.name, skill.invocation.modelInvocable]),
+      [['skill-one', true], ['skill-two', false]],
+      'the outer view maps the unfiltered nested catalog onto the session selection',
+    );
+  });
 });

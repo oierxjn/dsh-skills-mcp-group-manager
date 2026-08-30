@@ -23,7 +23,7 @@ test('load: missing file yields empty state', async () => {
   try {
     const store = createStateStore({ dshHome: home });
     const state = await store.load();
-    assert.deepEqual(state, { groups: [] });
+    assert.deepEqual(state, { groups: [], sessions: {} });
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -36,7 +36,7 @@ test('load: corrupt file yields empty state', async () => {
     await writeFile(join(dir, 'state.json'), '{not json', 'utf8').catch(() => {});
     const store = createStateStore({ dshHome: home });
     const state = await store.load();
-    assert.deepEqual(state, { groups: [] });
+    assert.deepEqual(state, { groups: [], sessions: {} });
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -82,11 +82,47 @@ test('normalizeState: the legacy mcp section is dropped (MCP lives in cordis.pat
     groups: [],
     mcp: [{ serverName: 'srv', transport: 'stdio', command: 'npx', enabled: true, addedByUser: true }],
   });
-  assert.deepEqual(state, { groups: [] });
+  assert.deepEqual(state, { groups: [], sessions: {} });
+});
+
+test('normalizeState: sessions section keeps valid overrides, drops malformed entries', () => {
+  const state = normalizeState({
+    groups: [],
+    sessions: {
+      'sess-ok': { enabledGroupIds: ['g1', 'g2'] },
+      'sess-partial': { enabledGroupIds: ['g1', 42] },
+      'sess-no-array': { enabledGroupIds: 'g1' },
+      'sess-not-object': 'g1',
+    },
+  });
+  assert.deepEqual(state.sessions, {
+    'sess-ok': { enabledGroupIds: ['g1', 'g2'] },
+    // non-string ids inside a kept entry are dropped; the entry survives
+    'sess-partial': { enabledGroupIds: ['g1'] },
+  });
+  assert.deepEqual(normalizeState({ groups: [], sessions: ['nope'] }).sessions, {});
+  assert.deepEqual(normalizeState({ groups: [], sessions: null }).sessions, {});
+});
+
+test('update: sessions overrides persist and survive a fresh store', async () => {
+  const home = await tempHome();
+  try {
+    const store = createStateStore({ dshHome: home });
+    await store.load();
+    await store.update({
+      groups: [{ id: 'g1', name: 'G1', enabled: true, skills: ['skill-a'] }],
+      sessions: { 'sess-1': { enabledGroupIds: ['g1'] } },
+    });
+    const store2 = createStateStore({ dshHome: home });
+    const state2 = await store2.load();
+    assert.deepEqual(state2.sessions, { 'sess-1': { enabledGroupIds: ['g1'] } });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test('normalizeState: non-object input yields empty state', () => {
-  assert.deepEqual(normalizeState(null), { groups: [] });
-  assert.deepEqual(normalizeState('nope'), { groups: [] });
-  assert.deepEqual(normalizeState(undefined), { groups: [] });
+  assert.deepEqual(normalizeState(null), { groups: [], sessions: {} });
+  assert.deepEqual(normalizeState('nope'), { groups: [], sessions: {} });
+  assert.deepEqual(normalizeState(undefined), { groups: [], sessions: {} });
 });

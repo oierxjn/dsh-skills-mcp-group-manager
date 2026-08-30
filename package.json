@@ -1,7 +1,7 @@
 {
   "name": "dsh-skills-mcp-group-manager",
   "version": "0.4.0",
-  "description": "DeepSeek Harness Skills & MCPs Group Manager: group skills, filter the model skill catalog, toggle MCP servers, left panel UI",
+  "description": "DeepSeek Harness Skills & MCPs Group Manager: group skills, filter the model skill catalog, toggle MCP servers, settings-page management UI",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -42,7 +42,8 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-layout"
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-slots"
       ],
       "platform": "web"
     }
