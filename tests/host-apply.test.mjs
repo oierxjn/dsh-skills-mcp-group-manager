@@ -442,3 +442,84 @@ test('shadow list survives its own nested registry pass (scope re-entrancy)', as
     );
   });
 });
+
+// The group mutation tools used to return {} with a degenerate empty-object
+// output schema (additionalProperties:false, properties:{}) — self-consistent
+// but useless: callers got no confirmation payload and nothing kept schema and
+// return value together. Each mutation now echoes the affected entity, and the
+// declared output schema must stay in lockstep with it (key sets match exactly
+// under additionalProperties:false).
+test('group mutation tools echo a payload matching their output schema', async () => {
+  await withTempHome(async () => {
+    const { ctx, tools } = fakeCtx();
+    apply(ctx, {});
+    const toolMap = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+
+    const assertMatchesSchema = (result, tool) => {
+      const schema = tool.output.schema;
+      assert.equal(schema.type, 'object', `${tool.name}: object output schema`);
+      assert.equal(schema.additionalProperties, false, `${tool.name}: closed object`);
+      assert.ok(result !== null && typeof result === 'object', `${tool.name}: object result`);
+      // additionalProperties:false + every property required => key sets match exactly.
+      assert.deepEqual(
+        Object.keys(result).sort(),
+        Object.keys(schema.properties).sort(),
+        `${tool.name}: result keys match schema properties exactly`,
+      );
+      // The "key sets match exactly" guarantee only holds because valueSchema
+      // hoists every inline `required: true` into the top-level `required`
+      // array. If that hoist regresses (a field silently stops being
+      // required), the result↔properties check above would stay green while
+      // the schema itself drifted — so assert the hoist explicitly.
+      assert.deepEqual(
+        (schema.required ?? []).sort(),
+        Object.keys(schema.properties).sort(),
+        `${tool.name}: every output property is hoisted into required`,
+      );
+      for (const [key, prop] of Object.entries(schema.properties)) {
+        const value = result[key];
+        if (prop.type === 'string') {
+          assert.equal(typeof value, 'string', `${tool.name}.${key}: string`);
+        } else if (prop.type === 'boolean') {
+          assert.equal(typeof value, 'boolean', `${tool.name}.${key}: boolean`);
+        } else if (prop.type === 'array') {
+          assert.ok(Array.isArray(value), `${tool.name}.${key}: array`);
+          for (const item of value) {
+            assert.equal(typeof item, 'string', `${tool.name}.${key}[]: string`);
+          }
+        }
+      }
+    };
+
+    const created = await toolMap.manager_groups_create.execute({ name: 'G1' });
+    assertMatchesSchema(created, toolMap.manager_groups_create);
+
+    const renamed = await toolMap.manager_groups_rename.execute({ id: created.id, name: 'Renamed' });
+    assertMatchesSchema(renamed, toolMap.manager_groups_rename);
+    assert.deepEqual(renamed, { id: created.id, name: 'Renamed' });
+
+    const disabled = await toolMap.manager_groups_set_enabled.execute({ id: created.id, enabled: false });
+    assertMatchesSchema(disabled, toolMap.manager_groups_set_enabled);
+    assert.deepEqual(disabled, { id: created.id, enabled: false });
+
+    const added = await toolMap.manager_groups_add_skill.execute({ id: created.id, skill: 'skill-one' });
+    assertMatchesSchema(added, toolMap.manager_groups_add_skill);
+    assert.deepEqual(added, { id: created.id, skills: ['skill-one'] });
+
+    // Batch form echoes the full post-operation membership, not just the delta.
+    const addedMore = await toolMap.manager_groups_add_skill.execute({
+      id: created.id,
+      skills: ['skill-two', 'skill-three', 'skill-one'], // 'skill-one' deduped
+    });
+    assertMatchesSchema(addedMore, toolMap.manager_groups_add_skill);
+    assert.deepEqual(addedMore, { id: created.id, skills: ['skill-one', 'skill-two', 'skill-three'] });
+
+    const removed = await toolMap.manager_groups_remove_skill.execute({ id: created.id, skill: 'skill-one' });
+    assertMatchesSchema(removed, toolMap.manager_groups_remove_skill);
+    assert.deepEqual(removed, { id: created.id, skills: ['skill-two', 'skill-three'] });
+
+    const deleted = await toolMap.manager_groups_delete.execute({ id: created.id });
+    assertMatchesSchema(deleted, toolMap.manager_groups_delete);
+    assert.deepEqual(deleted, { id: created.id });
+  });
+});
