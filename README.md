@@ -65,7 +65,27 @@ dsh plugin --profile web remove dsh-skills-mcp-group-manager
 | `lib/status.js` | 从 loader entries 枚举 MCP 服务器(fiber 相位镜像 + `mcp__<server>__*` 工具计数) |
 | `lib/probe.js` | 独立 MCP 客户端连接探测(`initialize` + `tools/list`,8s 超时,永不抛出) |
 | `scripts/cleanup.mjs` | `postuninstall` 清理脚本 |
+| `lib/types.js` | 共享 JSDoc 类型契约(仅类型,零运行时):ManagerState / McpServerConfig / PatchRow / 各 RPC 参数等 |
+| `types/dsh.d.ts` | DSH 宿主平台面的环境声明(注入服务的最小成员面,全局可见) |
+| `tsconfig.json` | `tsc --checkJs` 严格检查配置(`noEmit`,详见下文「类型检查」) |
 | `cordis.patch.yml` | bundle 补丁,把插件行插入宿主组合 |
+
+## 🔍 类型检查 / Type Checking(强类型,仍保持纯 JS)
+
+宿主半代码**保持手写 JS、零构建**,但通过 JSDoc + `tsc --checkJs` 获得接近 TS 的严格检查(全套 strict 选项,含 `exactOptionalPropertyTypes`、`noUncheckedIndexedAccess`):
+
+```bash
+npm install        # 开发依赖(typescript、@types/*);装机依赖用 --legacy-peer-deps(见 package.json 说明)
+npm run typecheck  # tsc --noEmit,lib/ 全量严格检查,当前 0 错误
+npm test           # node --test tests/*.test.mjs,行为锚点
+```
+
+约定:
+
+- **共享契约集中在 `lib/types.js`**(仅类型的模块,`import('./types.js').X` 出现在 JSDoc 类型位,完全擦除,不产生运行时代码);宿主平台面(注入的 skills/tools/agents/loader/webServer 服务)在 `types/dsh.d.ts` 以全局环境声明描述。
+- **类型转换只出现在边界**:不可信 JSON 入口、惰性加载的第三方库(MCP SDK 的 exactOptionalPropertyTypes 不兼容处)、以及"运行时已由校验保证"的窄化点,均以显式 `/** @type */` 转换并附注释。
+- **`tests/**` 不在 checkJs 范围内**:测试的价值在行为(以 `node --test` 为锚点),其 mock 双对象若按严格检查标注需要为宿主内部面发明完整类型,收益低于噪声;`lib/client.js` 同样暂未纳入(经典脚本加载格式,属后续切片)。
+
 
 ## 🧵 按会话分组 / Per-session Groups
 

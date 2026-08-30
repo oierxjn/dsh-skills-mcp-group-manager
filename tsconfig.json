@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "exactOptionalPropertyTypes": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "skipLibCheck": true
+  },
+  "include": ["lib/**/*.js", "types/**/*.d.ts"],
+  "exclude": ["node_modules", "lib/client.js", "tests/**/*.mjs"]
+}
