@@ -149,8 +149,12 @@ interface HostPluginContext {
   get(key: string): unknown;
   /** Register a fiber-scoped side effect; the returned disposer (if any) runs on dispose. */
   effect(setup: () => unknown, label?: string): void;
-  /** Subscribe to a lifecycle event (`agent/created`, `agent/disposed`, `internal/service`). */
-  on(event: string, listener: (payload: never) => void): void;
+  /** Subscribe to agent lifecycle events (payload carries the agent). */
+  on(event: 'agent/created' | 'agent/disposed', listener: (payload: { agent: AgentEntry }) => void): void;
+  /** Subscribe to internal service registration events (payload is the service key). */
+  on(event: 'internal/service', listener: (payload: string) => void): void;
+  /** Subscribe to any other lifecycle event (payload shape unspecified). */
+  on(event: string, listener: (payload: unknown) => void): void;
   skills: SkillRegistry;
   tools: ToolRegistry;
   agents: AgentRegistry;
