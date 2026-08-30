@@ -12,7 +12,16 @@ process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-schema-check-'));
 const dshToolsPath = process.argv[2]
   ?? process.env.DSH_TOOLS
   ?? 'D:/Temp/T/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js';
-const tools = await import(pathToFileURL(dshToolsPath).href);
+let tools;
+try {
+  tools = await import(pathToFileURL(dshToolsPath).href);
+} catch (error) {
+  console.error(`cannot load dsh-tools from ${dshToolsPath}: ${error.message}`);
+  console.error('point the script at an installed harness dsh-tools/lib/index.js:');
+  console.error('  node scripts/check-tool-schemas.mjs <path-to-dsh-tools-lib-index-js>');
+  console.error('or set the DSH_TOOLS environment variable to that path.');
+  process.exit(1);
+}
 const { apply } = await import('../lib/index.js');
 
 const registered = [];

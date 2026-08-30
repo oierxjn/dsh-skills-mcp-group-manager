@@ -387,3 +387,58 @@ test('session override invalidates only the target agent catalog', async () => {
     assert.equal(value.override, null);
   });
 });
+
+
+// Regression for the Copilot-flagged gap: the shadow provider's
+// AsyncLocalStorage re-entrancy guard had no coverage - a broken guard
+// would recurse infinitely inside the real registry's nested collect
+// while every existing test (whose skills.list stub ignores scope) stays
+// green. This test models the real registry: listing with the requesting
+// scope walks [global, preset, agent], and reaching the agent layer
+// re-invokes the shadow provider through the same async chain.
+test('shadow list survives its own nested registry pass (scope re-entrancy)', async () => {
+  await withTempHome(async () => {
+    const invalidated = [];
+    const agent = fakeAgent('sess-a', invalidated);
+    const { ctx, tools } = fakeCtx();
+    ctx.agents.list = () => [agent];
+    apply(ctx, {});
+    assert.equal(agent.providers.length, 1);
+    const shadow = agent.providers[0];
+
+    const toolMap = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+    const g1 = (await toolMap.manager_groups_create.execute({ name: 'G1' })).id;
+    await toolMap.manager_groups_add_skill.execute({ id: g1, skill: 'skill-one' });
+
+    // The preset standing layer's unfiltered catalog.
+    const presetCandidates = [
+      { name: 'skill-one', description: 'one', invocation: { modelInvocable: true, userInvocable: true }, source: 'preset', rank: 100, provider: 'filesystem' },
+      { name: 'skill-two', description: 'two', invocation: { modelInvocable: true, userInvocable: true }, source: 'preset', rank: 100, provider: 'filesystem' },
+    ];
+
+    const requested = { cwd: '.', signal: new AbortController().signal, scope: agent };
+    let nestedPasses = 0;
+    const reentrantResults = [];
+    ctx.skills.list = async (options) => {
+      assert.equal(options.scope, requested.scope, 'the shadow must forward the requesting scope');
+      nestedPasses += 1;
+      assert.ok(nestedPasses <= 2, `runaway recursion: ${nestedPasses} nested passes`);
+      // The registry reaches the agent layer and re-invokes the shadow
+      // provider; the guard must make that re-entrant pass contribute
+      // nothing so THIS call resolves the unfiltered catalog.
+      const fromAgentLayer = await shadow.list(options);
+      reentrantResults.push(fromAgentLayer);
+      return [...presetCandidates, ...fromAgentLayer];
+    };
+
+    // Outermost entry: the registry reaching the agent layer.
+    const listed = await shadow.list(requested);
+    assert.equal(nestedPasses, 1, 'exactly one nested registry pass (no recursion)');
+    assert.deepEqual(reentrantResults, [[]], 'the re-entrant shadow pass yields []');
+    assert.deepEqual(
+      listed.map((skill) => [skill.name, skill.invocation.modelInvocable]),
+      [['skill-one', true], ['skill-two', false]],
+      'the outer view maps the unfiltered nested catalog onto the session selection',
+    );
+  });
+});
