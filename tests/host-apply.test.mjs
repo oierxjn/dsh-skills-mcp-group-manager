@@ -343,6 +343,46 @@ test('RPC route rejects cross-origin requests (CSRF guard)', async () => {
   });
 });
 
+// Finding #4: group CRUD used to throw bare `Error`, which the RPC layer
+// collapses to `code: 'internal'` — so the browser half could not tell a
+// caller error (bad args / unknown id) from a real failure. Group APIs now
+// throw the same structured McpError as the MCP APIs.
+test('group RPC errors are structured (invalid-args / not-found, not internal)', async () => {
+  await withTempHome(async () => {
+    const { ctx, effects, routes } = fakeCtx();
+    apply(ctx, {});
+    effects.find((effect) => effect.label === 'mcp-skill-manager: rpc route').callback();
+
+    // Empty group name → caller error, not internal.
+    let res = await callRpc(routes, 'manager.groups.create', { name: '' });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'invalid-args');
+
+    res = await callRpc(routes, 'manager.groups.create', { name: 'G1' });
+    assert.equal(res.ok, true);
+    const g1 = res.value.id;
+
+    // Missing / malformed args → caller error.
+    res = await callRpc(routes, 'manager.groups.rename', { name: 'X' });
+    assert.equal(res.error.code, 'invalid-args');
+    res = await callRpc(routes, 'manager.groups.setEnabled', { id: g1, enabled: 'yes' });
+    assert.equal(res.error.code, 'invalid-args');
+    res = await callRpc(routes, 'manager.groups.addSkill', { id: g1 });
+    assert.equal(res.error.code, 'invalid-args');
+    res = await callRpc(routes, 'manager.groups.removeSkill', { id: g1 });
+    assert.equal(res.error.code, 'invalid-args');
+
+    // Unknown group id → not-found (delete goes through requireGroup; the
+    // add/remove paths through state.js's group lookup).
+    res = await callRpc(routes, 'manager.groups.delete', { id: 'ghost' });
+    assert.equal(res.error.code, 'not-found');
+    res = await callRpc(routes, 'manager.groups.addSkill', { id: 'ghost', skill: 's' });
+    assert.equal(res.error.code, 'not-found');
+    res = await callRpc(routes, 'manager.groups.removeSkill', { id: 'ghost', skill: 's' });
+    assert.equal(res.error.code, 'not-found');
+  });
+});
+
 test('manager_session_* tools are scoped to the calling session (exec.agent.id)', async () => {
   await withTempHome(async () => {
     const { ctx, tools } = fakeCtx();
