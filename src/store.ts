@@ -1,0 +1,150 @@
+/**
+ * dsh-mcp-skill-manager — dedicated state store.
+ *
+ * The user asked for group state to live OUTSIDE `settings.yaml`, in a
+ * plugin-owned location that is removed together with the plugin on
+ * uninstall. This module persists state to:
+ *
+ *   `<harness home>/mcp-skill-manager/state.json`
+ *
+ * (`<harness home>` = `$DSH_HOME` or `~/.dsh`). Writes are atomic
+ * (temp file + rename) and serialized through a promise chain; reads fall
+ * back to the empty state on missing or corrupt files. The whole directory
+ * is plugin-owned, so uninstalling the plugin (which runs the package's
+ * `postuninstall` script, `scripts/cleanup.mjs`) removes the data with it.
+ *
+ * The store exposes the same surface the host half used on the settings
+ * scope — `get()` / `update(patch)` — plus `load()` for startup.
+ */
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { basename, dirname, join } from 'node:path'
+import type { Logger, ManagerState, SessionOverride, StateStore } from './types.ts'
+
+/** Resolve the plugin-owned state directory under the harness home. */
+export function resolveStateDir(dshHome: string | undefined): string {
+  const home = dshHome ?? process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  return join(home, 'mcp-skill-manager')
+}
+
+/**
+ * Synchronous atomic file write (temp file + rename, parent directory
+ * created). Shared by the state store and the cordis.patch.yml editor so both
+ * persist through the same crash-safe path.
+ */
+export function writeFileAtomicSync(file: string, content: string): void {
+  const dir = dirname(file)
+  mkdirSync(dir, { recursive: true })
+  const tmp = join(dir, `.${basename(file)}.${process.pid}.${Date.now()}.tmp`)
+  writeFileSync(tmp, content, 'utf8')
+  renameSync(tmp, file)
+}
+
+/** Normalize an untrusted parsed document into the state shape. */
+export function normalizeState(raw: unknown): ManagerState {
+  const doc = (raw ?? {}) as { groups?: unknown; sessions?: unknown }
+  const groups: ManagerState['groups'] = Array.isArray(doc.groups)
+    ? doc.groups.filter((g) => g !== null && typeof g === 'object'
+      && typeof (g as { id?: unknown }).id === 'string'
+      && typeof (g as { name?: unknown }).name === 'string'
+      && typeof (g as { enabled?: unknown }).enabled === 'boolean'
+      && Array.isArray((g as { skills?: unknown }).skills)
+      && ((g as { skills: unknown[] }).skills).every((s) => typeof s === 'string'))
+      .map((g) => g as ManagerState['groups'][number])
+    : []
+  const sessions: Record<string, SessionOverride> = {}
+  if (doc.sessions !== null && typeof doc.sessions === 'object' && !Array.isArray(doc.sessions)) {
+    for (const [sessionId, entry] of Object.entries(doc.sessions as Record<string, unknown>)) {
+      if (entry === null || typeof entry !== 'object' || !Array.isArray((entry as { enabledGroupIds?: unknown }).enabledGroupIds)) continue
+      // Non-string ids inside a kept entry are dropped; the entry itself is
+      // dropped only when enabledGroupIds is not an array at all.
+      sessions[sessionId] = {
+        enabledGroupIds: ((entry as { enabledGroupIds: unknown[] }).enabledGroupIds).filter((id) => typeof id === 'string'),
+      }
+    }
+  }
+  // The legacy `mcp` section is deliberately dropped: MCP servers now live in
+  // cordis.patch.yml (see src/patch.ts); state.json only owns skill groups and
+  // per-session group overrides.
+  return { groups, sessions }
+}
+
+/** Create the state store. */
+export function createStateStore(options: { dshHome?: string | undefined; logger?: Logger } = {}): StateStore {
+  const { dshHome, logger = console } = options
+  const dir = resolveStateDir(dshHome)
+  const file = join(dir, 'state.json')
+  let state: ManagerState = { groups: [], sessions: {} }
+  let writeChain: Promise<void> = Promise.resolve()
+
+  /**
+   * Load state from disk SYNCHRONOUSLY (idempotent; safe to call once at
+   * startup). The host plugin's apply() must stay synchronous — Cordis
+   * treats a prototype-bearing function as a constructor and ignores its
+   * returned promise, so an async apply would turn any post-await throw
+   * into an unhandled rejection that crashes the whole dsh process.
+   */
+  function loadSync(): ManagerState {
+    try {
+      state = normalizeState(JSON.parse(readFileSync(file, 'utf8')) as unknown)
+    } catch (error) {
+      const code = (error as { code?: unknown } | null | undefined)?.code
+      if (code !== 'ENOENT') {
+        logger.warn?.(`mcp-skill-manager: state file unreadable (${file}): ${String(error)}; starting empty`)
+      }
+      state = { groups: [], sessions: {} }
+    }
+    return state
+  }
+
+  /** Load state from disk (async variant; kept for tests and tooling). */
+  async function load(): Promise<ManagerState> {
+    try {
+      const raw = await readFile(file, 'utf8')
+      state = normalizeState(JSON.parse(raw) as unknown)
+    } catch (error) {
+      const code = (error as { code?: unknown } | null | undefined)?.code
+      if (code !== 'ENOENT') {
+        logger.warn?.(`mcp-skill-manager: state file unreadable (${file}): ${String(error)}; starting empty`)
+      }
+      state = { groups: [], sessions: {} }
+    }
+    return state
+  }
+
+  /** Current in-memory state (plain data; callers must not mutate it). */
+  function get(): ManagerState {
+    return state
+  }
+
+  /** Merge a patch into the state and persist atomically. */
+  function update(patch: Partial<ManagerState>): Promise<void> {
+    state = { ...state, ...patch }
+    return persist()
+  }
+
+  /** Replace the whole state and persist atomically. */
+  function replace(next: unknown): Promise<void> {
+    state = normalizeState(next)
+    return persist()
+  }
+
+  /** Serialized atomic write; failures never poison the chain. */
+  function persist(): Promise<void> {
+    const snapshot = JSON.stringify(state, null, 2)
+    writeChain = writeChain
+      .then(async () => {
+        await mkdir(dir, { recursive: true })
+        const tmp = join(dir, `.state.${process.pid}.${Date.now()}.tmp`)
+        await writeFile(tmp, snapshot, 'utf8')
+        await rename(tmp, file)
+      })
+      .catch((error) => {
+        logger.error?.(`mcp-skill-manager: state write failed (${file}): ${String(error)}`)
+      })
+    return writeChain
+  }
+
+  return { load, loadSync, get, update, replace, persist, dir, file }
+}

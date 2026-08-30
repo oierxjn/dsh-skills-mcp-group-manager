@@ -1,6 +1,6 @@
 /**
  * Ambient type declarations for the DSH host platform surface consumed by
- * this plugin (host half: `lib/index.js`, `lib/status.js`).
+ * this plugin (host half: `src/index.ts`, `src/status.ts`, built to `lib/`).
  *
  * The real services are injected by the harness at runtime
  * (`inject: ['skills', 'tools', 'agents', 'loader']`); these declarations are

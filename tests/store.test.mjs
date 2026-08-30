@@ -1,5 +1,5 @@
 /**
- * Unit tests for the plugin-owned state store (lib/store.js).
+ * Unit tests for the plugin-owned state store (src/store.ts).
  * Uses a temp directory as the harness home; never touches ~/.dsh.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createStateStore, normalizeState, resolveStateDir } from '../lib/store.js';
+import { createStateStore, normalizeState, resolveStateDir } from '../src/store.ts';
 
 async function tempHome() {
   return mkdtemp(join(tmpdir(), 'msm-store-'));

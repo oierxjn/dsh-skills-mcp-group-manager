@@ -39,7 +39,7 @@ dsh plugin --profile web add link:E:\path\to\dsh-skills-mcp-group-manager
 # 重启 web profile 进程后生效(当前 GUI 由 dsh web 提供,重启后刷新页面)
 ```
 
-> **为什么无需额外步骤?** 宿主半插件保持纯手写 JS、零构建;仅有的两个运行时依赖(`js-yaml`、`@modelcontextprotocol/sdk`,见 `dependencies`)在安装时由 pnpm 自动落盘,且均为惰性加载——即使 `link:` 安装缺少 node_modules,插件与分组功能仍可启动,仅 MCP 编辑/探测会报出明确错误。
+> **为什么无需额外步骤?** 宿主半插件为 TypeScript 源码,构建产物(单文件 `lib/index.js` + `lib/types/*.d.ts`)已提交到 git,git 安装无需现场构建;仅有的两个运行时依赖(`js-yaml`、`@modelcontextprotocol/sdk`,见 `dependencies`)在安装时由 pnpm 自动落盘,且均为惰性加载——即使 `link:` 安装缺少 node_modules,插件与分组功能仍可启动,仅 MCP 编辑/探测会报出明确错误。
 
 > **npm 包说明** 本仓库是自行维护的 fork,不发布到 npm registry;`dsh plugin add dsh-skills-mcp-group-manager`(npm 包名)安装的是上游版本,不含本 fork 的改动。
 
@@ -57,34 +57,41 @@ dsh plugin --profile web remove dsh-skills-mcp-group-manager
 
 | 文件 | 说明 |
 | --- | --- |
-| `lib/index.js` | Host 半插件:状态模型、skill 目录过滤(shadow provider `skill-manager-filter`,按会话解析覆写)、MCP 枚举/启停/增删改(编辑 `cordis.patch.yml`,HMR 热生效)与连接探测、15 个 `manager_*` 工具、RPC 路由 `/plugins/dsh-skills-mcp-group-manager/rpc` |
-| `lib/client.js` | Client 半插件:设置页「技能分组」「MCP」两个分区 + 会话头部按会话分组 popover(可新建分组);MCP 卡片列表(状态徽标/探测/编辑) |
-| `lib/state.js` | 纯状态逻辑(零依赖):分组操作、按会话注入集合(`enabledSkillNamesFor`)+ MCP 配置的字段级校验 |
-| `lib/store.js` | 分组与会话覆写状态存储(原子写 + 序列化写链 + 容错读取)+ 共享原子写辅助 |
-| `lib/patch.js` | `cordis.patch.yml` 读写(insert 行 / `{id,name,disabled}` 覆写行,`!!js` 保留,原子写) |
-| `lib/status.js` | 从 loader entries 枚举 MCP 服务器(fiber 相位镜像 + `mcp__<server>__*` 工具计数) |
-| `lib/probe.js` | 独立 MCP 客户端连接探测(`initialize` + `tools/list`,8s 超时,永不抛出) |
+| `src/index.ts` | Host 半插件:状态模型、skill 目录过滤(shadow provider `skill-manager-filter`,按会话解析覆写)、MCP 枚举/启停/增删改(编辑 `cordis.patch.yml`,HMR 热生效)与连接探测、15 个 `manager_*` 工具、RPC 路由 `/plugins/dsh-skills-mcp-group-manager/rpc` |
+| `src/state.ts` | 纯状态逻辑(零依赖):分组操作、按会话注入集合(`enabledSkillNamesFor`)+ MCP 配置的字段级校验 |
+| `src/store.ts` | 分组与会话覆写状态存储(原子写 + 序列化写链 + 容错读取)+ 共享原子写辅助 |
+| `src/patch.ts` | `cordis.patch.yml` 读写(insert 行 / `{id,name,disabled}` 覆写行,`!!js` 保留,原子写) |
+| `src/status.ts` | 从 loader entries 枚举 MCP 服务器(fiber 相位镜像 + `mcp__<server>__*` 工具计数) |
+| `src/probe.ts` | 独立 MCP 客户端连接探测(`initialize` + `tools/list`,8s 超时,永不抛出) |
+| `src/types.ts` | 共享类型契约(仅类型,零运行时):ManagerState / McpServerConfig / PatchRow / 各 RPC 参数等 |
+| `src/errors.ts` | 结构化错误 `McpError(code, message, fields?)`(RPC/tool 面统一错误码) |
+| `src/tool-schemas.ts` | 纯工具 schema 数据 + `parameterSchema`/`valueSchema` 转换器 |
+| `lib/index.js` | **构建产物**(`tsc → lib/types → tsdown`):host 半的单文件 ESM bundle(loader 的 import 目标) |
+| `lib/types/*.d.ts` | **构建产物**:host 半的声明(发布面) |
+| `lib/client.js` | Client 半插件(仍为手写经典脚本):设置页「技能分组」「MCP」两个分区 + 会话头部按会话分组 popover(可新建分组);MCP 卡片列表(状态徽标/探测/编辑) |
 | `scripts/cleanup.mjs` | `postuninstall` 清理脚本 |
-| `lib/types.js` | 共享 JSDoc 类型契约(仅类型,零运行时):ManagerState / McpServerConfig / PatchRow / 各 RPC 参数等 |
 | `types/dsh.d.ts` | DSH 宿主平台面的环境声明(注入服务的最小成员面,全局可见) |
-| `tsconfig.json` | `tsc --checkJs` 严格检查配置(`noEmit`,详见下文「类型检查」) |
+| `tsconfig.json` | `tsc` 构建配置(rootDir `src`,outDir `lib/types`) |
+| `tsdown.config.ts` | host bundle 配置(entry `lib/types/index.js` → `lib/index.js`;生产依赖 external,其余内联) |
 | `cordis.patch.yml` | bundle 补丁,把插件行插入宿主组合 |
 
-## 🔍 类型检查 / Type Checking(强类型,仍保持纯 JS)
+## 🔨 构建与类型检查 / Build & Type Checking
 
-宿主半代码**保持手写 JS、零构建**,但通过 JSDoc + `tsc --checkJs` 获得接近 TS 的严格检查(全套 strict 选项,含 `exactOptionalPropertyTypes`、`noUncheckedIndexedAccess`):
+宿主半侧为 TypeScript 源码,经官方同款链路构建:tsc 产出 `lib/types/*.{js,d.ts,map}`,tsdown 再打包为单文件 `lib/index.js`。**构建产物已提交到 git**(本 fork 不发布 npm,git 安装无需现场构建);`lib/types/*.js` 与 `*.map` 为中间产物,不入库。
 
 ```bash
-npm install        # 开发依赖(typescript、@types/*);装机依赖用 --legacy-peer-deps(见 package.json 说明)
-npm run typecheck  # tsc --noEmit,lib/ 全量严格检查,当前 0 错误
-npm test           # node --test tests/*.test.mjs,行为锚点
+npm install          # 开发依赖(typescript、tsdown、tsx、@types/*);装机依赖用 --legacy-peer-deps(见 package.json 说明)
+npm run typecheck    # tsc --noEmit,检查 src/**/*.ts,当前 0 错误
+npm test             # node --import tsx --test tests/*.test.mjs,行为锚点
+npm run build        # tsc && tsdown,重新生成 lib/index.js + lib/types/*.d.ts
+npm run check:built  # build 后 git diff --exit-code lib/,防产物漂移
 ```
 
 约定:
 
-- **共享契约集中在 `lib/types.js`**(仅类型的模块,`import('./types.js').X` 出现在 JSDoc 类型位,完全擦除,不产生运行时代码);宿主平台面(注入的 skills/tools/agents/loader/webServer 服务)在 `types/dsh.d.ts` 以全局环境声明描述。
-- **类型转换只出现在边界**:不可信 JSON 入口、惰性加载的第三方库(MCP SDK 的 exactOptionalPropertyTypes 不兼容处)、以及"运行时已由校验保证"的窄化点,均以显式 `/** @type */` 转换并附注释。
-- **`tests/**` 不在 checkJs 范围内**:测试的价值在行为(以 `node --test` 为锚点),其 mock 双对象若按严格检查标注需要为宿主内部面发明完整类型,收益低于噪声;`lib/client.js` 同样暂未纳入(经典脚本加载格式,属后续切片)。
+- **共享契约集中在 `src/types.ts`**(仅类型模块,`import type { ... } from './types.ts'` 完全擦除,不产生运行时代码);宿主平台面(注入的 skills/tools/agents/loader/webServer 服务)在 `types/dsh.d.ts` 以全局环境声明描述。
+- **类型转换只出现在边界**:不可信 JSON 入口(`args as unknown as X`)、惰性加载的第三方库(MCP SDK 的 exactOptionalPropertyTypes 不兼容处)、以及"运行时已由校验保证"的窄化点,均以显式转换并附注释。
+- **`tests/**` 不在 tsc 范围内**:测试的价值在行为(以 `node --test` 为锚点),其 mock 双对象若按严格检查标注需要为宿主内部面发明完整类型,收益低于噪声;`lib/client.js` 同样暂未纳入(经典脚本加载格式,属后续切片)。
 
 
 ## 🧵 按会话分组 / Per-session Groups

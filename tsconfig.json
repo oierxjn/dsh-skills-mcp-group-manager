@@ -1,21 +1,26 @@
 {
   "compilerOptions": {
-    "allowJs": true,
-    "checkJs": true,
-    "noEmit": true,
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "declaration": true,
+    "sourceMap": true,
+    "declarationMap": true,
     "strict": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitReturns": true,
     "exactOptionalPropertyTypes": true,
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "target": "ES2022",
-    "lib": ["ES2022"],
-    "types": ["node"],
-    "skipLibCheck": true
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"]
   },
-  "include": ["lib/**/*.js", "types/**/*.d.ts"],
-  "exclude": ["node_modules", "lib/client.js", "tests/**/*.mjs"]
+  "include": ["src/**/*.ts", "types/**/*.d.ts"],
+  "exclude": ["node_modules", "tests/**/*.mjs", "lib/client.js"]
 }
