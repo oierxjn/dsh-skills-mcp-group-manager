@@ -205,7 +205,7 @@ test('addSkillsToGroup: appends multiple names in one immutable update, deduped'
   assert.deepEqual(state.groups[0].skills, ['a']);
   assert.notEqual(next.groups, state.groups);
   // unknown group: throws
-  assert.throws(() => addSkillsToGroup(state, 'nope', ['x']), /does not exist/);
+  assert.throws(() => addSkillsToGroup(state, 'nope', ['x']), (error) => error.code === 'not-found' && /does not exist/.test(error.message));
 });
 
 test('removeSkillsFromGroup: removes multiple names in one immutable update', () => {
@@ -213,5 +213,5 @@ test('removeSkillsFromGroup: removes multiple names in one immutable update', ()
   const next = removeSkillsFromGroup(state, 'g1', ['a', 'c']);
   assert.deepEqual(next.groups[0].skills, ['b']);
   assert.deepEqual(state.groups[0].skills, ['a', 'b', 'c']);
-  assert.throws(() => removeSkillsFromGroup(state, 'nope', ['x']), /does not exist/);
+  assert.throws(() => removeSkillsFromGroup(state, 'nope', ['x']), (error) => error.code === 'not-found' && /does not exist/.test(error.message));
 });
