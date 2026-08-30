@@ -70,7 +70,7 @@ test('bundle registers under the package id and exports a plugin face', () => {
   const { registration, plugin } = evaluateBundle();
   assert.equal(registration.id, 'dsh-skills-mcp-group-manager');
   assert.equal(typeof plugin.apply, 'function');
-  assert.deepEqual(plugin.inject, ['slots', 'locale']);
+  assert.deepEqual(plugin.inject, ['slots', 'locale', 'inputTriggers', 'connection', 'sessions']);
 });
 
 test('apply() wires locale, stylesheet, and the slot registrations', () => {
@@ -154,4 +154,105 @@ test('apply() wires locale, stylesheet, and the slot registrations', () => {
   assert.equal(toggle.options.name, 'conversation.session.header.actions');
   assert.equal(toggle.options.order, 10);
   assert.equal(typeof toggle.component, 'function');
+});
+
+test('apply() patches the slash skill source to fetch fresh per menu open', async () => {
+  const { plugin } = evaluateBundle();
+  // Host ui-skill-shaped source whose candidates/warm/lexicon delegate to a
+  // per-session cache (as the real source does); the patch must rewrite the
+  // fetch paths so every open pulls fresh through the connection API.
+  let listCalls = 0;
+  let catalog = [
+    { name: 'skill-one', description: 'one', modelInvocable: true, userInvocable: true },
+  ];
+  const skillSource = {
+    trigger: '/',
+    name: 'skill',
+    order: 2,
+    cacheHits: 0,
+    async candidates(session, { query, signal }) {
+      // Delegate like the real source: cached promise, counting cache hits.
+      this.cacheHits += 1;
+      return [];
+    },
+    warm() {},
+    lexicon() { return null; },
+    subscribeLexicon() { return () => {}; },
+    onPick({ candidate }) { return { text: `/${candidate.name} ` }; },
+  };
+  const triggers = {
+    live: { sources: [skillSource], controllers: new Map() },
+  };
+  const connection = {
+    api: {
+      skills: {
+        list: async () => {
+          listCalls += 1;
+          return { result: { ok: true, value: { skills: catalog } } };
+        },
+      },
+    },
+  };
+  const ctx = {
+    effect: () => () => {},
+    locale: { register: () => () => {}, bind: () => () => 'x' },
+    slots: { inject: () => {}, register: () => () => {} },
+    get: (key) => {
+      if (key === 'inputTriggers') return triggers;
+      if (key === 'connection') return connection;
+      if (key === 'sessions') return undefined;
+      return undefined;
+    },
+  };
+  plugin.apply(ctx);
+
+  assert.equal(skillSource.__msmFresh, true, 'the skill source is marked patched');
+  assert.equal(listCalls, 0, 'no fetch until the menu is used');
+
+  // First menu open: fresh fetch.
+  const session = { sessionId: 'sess-1' };
+  const first = await skillSource.candidates(session, { query: '', signal: new AbortController().signal });
+  assert.equal(listCalls, 1);
+  assert.deepEqual(first.map((skill) => skill.name), ['skill-one']);
+
+  // Keystroke refinement inside the same menu interaction filters locally:
+  // no new fetch, and the list is frozen at what the open resolved.
+  const refined = await skillSource.candidates(session, { query: 'skill-o', signal: new AbortController().signal });
+  assert.equal(listCalls, 1, 'keystroke refinement does not re-fetch');
+  assert.deepEqual(refined.map((skill) => skill.name), ['skill-one']);
+
+  // The host's cached behavior would return the stale list; reopening the
+  // menu (query back to empty) must re-fetch and see the new catalog.
+  catalog = [
+    { name: 'skill-one', description: 'one', modelInvocable: true, userInvocable: true },
+    { name: 'skill-two', description: 'two', modelInvocable: true, userInvocable: true },
+  ];
+  const second = await skillSource.candidates(session, { query: '', signal: new AbortController().signal });
+  assert.equal(listCalls, 2, 'every menu open fetches fresh (no per-session cache)');
+  assert.deepEqual(second.map((skill) => skill.name), ['skill-one', 'skill-two']);
+
+  // Lexicon follows the settled catalog.
+  assert.deepEqual(skillSource.lexicon(session), ['skill-one', 'skill-two']);
+
+  // Query filtering and the model-only tag keep the host's shape.
+  const filtered = await skillSource.candidates(session, { query: 'skill-t', signal: new AbortController().signal });
+  assert.equal(listCalls, 2, 'filtering still does not re-fetch');
+  assert.deepEqual(filtered.map((skill) => skill.name), ['skill-two']);
+
+  // A coalesced open on a cache-missing session (first call already carries
+  // a non-empty query) still fetches.
+  const fresh = await skillSource.candidates({ sessionId: 'sess-2' }, { query: 'skill', signal: new AbortController().signal });
+  assert.equal(listCalls, 3, 'cache miss fetches even with a non-empty query');
+  assert.deepEqual(fresh.map((skill) => skill.name), ['skill-one', 'skill-two']);
+});
+
+test('apply() keeps host behavior when the slash source is absent', () => {
+  const { plugin } = evaluateBundle();
+  const ctx = {
+    effect: () => () => {},
+    locale: { register: () => () => {}, bind: () => () => 'x' },
+    slots: { inject: () => {}, register: () => () => {} },
+    get: () => undefined, // no inputTriggers/connection at all
+  };
+  assert.doesNotThrow(() => plugin.apply(ctx), 'missing services degrade to host behavior');
 });
