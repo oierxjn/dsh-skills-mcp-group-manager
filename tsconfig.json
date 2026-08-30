@@ -16,6 +16,6 @@
     "types": ["node"],
     "skipLibCheck": true
   },
-  "include": ["lib/**/*.js", "tests/**/*.mjs", "types/**/*.d.ts"],
-  "exclude": ["node_modules", "lib/client.js"]
+  "include": ["lib/**/*.js", "types/**/*.d.ts"],
+  "exclude": ["node_modules", "lib/client.js", "tests/**/*.mjs"]
 }
