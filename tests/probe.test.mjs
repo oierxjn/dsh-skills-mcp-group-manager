@@ -1,5 +1,5 @@
 /**
- * Unit tests for lib/probe.js pure helpers.
+ * Unit tests for src/probe.ts pure helpers.
  *
  * probeServer() itself is not unit-tested here: it spawns real child
  * processes / HTTP sessions. The helpers it builds its transports from ARE
@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { stdioEnv } from '../lib/probe.js';
+import { stdioEnv } from '../src/probe.ts';
 
 test('stdioEnv: undefined and empty overrides inherit the host environment', () => {
   // The MCP SDK uses `env` as the child's FULL environment; passing `{}` would

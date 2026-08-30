@@ -9,6 +9,13 @@ docs/
 *.tgz
 npm-debug.log*
 
+# build intermediates (lib/types/*.js feeds tsdown; only lib/index.js and the
+# declarations under lib/types/*.d.ts are committed artifacts)
+lib/types/*.js
+lib/types/*.js.map
+lib/types/*.d.ts.map
+*.tsbuildinfo
+
 # OS / editor
 .DS_Store
 *.swp

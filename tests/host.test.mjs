@@ -16,7 +16,7 @@ import {
   removeSkillsFromGroup,
   snapshotState,
   validateMcpConfig,
-} from '../lib/state.js';
+} from '../src/state.ts';
 
 const emptyState = () => ({ groups: [] });
 

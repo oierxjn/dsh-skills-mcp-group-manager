@@ -4,8 +4,8 @@
  * `dsh plugin add` links the package into the profile; Node resolves the
  * plugin's imports from the source directory, which for a `link:` install has
  * no node_modules. The host half therefore keeps every runtime dependency
- * behind a lazy `import()` (js-yaml in lib/patch.js, the MCP SDK in
- * lib/probe.js) so plugin boot and the groups half never hard-require them —
+ * behind a lazy `import()` (js-yaml in src/patch.ts, the MCP SDK in
+ * src/probe.ts) so plugin boot and the groups half never hard-require them —
  * only the MCP features degrade (with a clear error) when the dependency is
  * missing. This static test guards that the external surface stays limited to
  * exactly those two packages (registry installs get them via
@@ -18,12 +18,12 @@ import { readFileSync, readdirSync } from 'node:fs';
 /** External packages the host half may import (lazily). */
 const ALLOWED_EXTERNAL = new Set(['js-yaml', '@modelcontextprotocol/sdk']);
 
-const libDir = new URL('../lib/', import.meta.url);
-// Host half only: client.js is the browser bundle, which may require the
-// platform seed words (react) by design.
-const hostFiles = readdirSync(libDir)
-  .filter((name) => name.endsWith('.js') && name !== 'client.js')
-  .map((name) => [name, readFileSync(new URL(name, libDir), 'utf8')]);
+const srcDir = new URL('../src/', import.meta.url);
+// Host half only: lib/client.js is the hand-written browser bundle (its own
+// contract tests read it directly); src/*.ts is the host half's source.
+const hostFiles = readdirSync(srcDir)
+  .filter((name) => name.endsWith('.ts'))
+  .map((name) => [name, readFileSync(new URL(name, srcDir), 'utf8')]);
 
 /** Package root of a specifier (`@scope/pkg/sub` → `@scope/pkg`). */
 function packageRoot(spec) {

@@ -15,9 +15,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { apply } from '../lib/index.js';
-import { writePatchList, readPatchList } from '../lib/patch.js';
-import { MCP_CLIENT_PACKAGE } from '../lib/status.js';
+import { apply } from '../src/index.ts';
+import { writePatchList, readPatchList } from '../src/patch.ts';
+import { MCP_CLIENT_PACKAGE } from '../src/status.ts';
 
 /** Fake loader entry (the subset of the composed-tree API the plugin reads). */
 function loaderEntry(id, name, config) {

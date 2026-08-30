@@ -1,5 +1,5 @@
 /**
- * Unit tests for the cordis.patch.yml editor (lib/patch.js).
+ * Unit tests for the cordis.patch.yml editor (src/patch.ts).
  * Uses a temp directory as the profile home; never touches ~/.dsh.
  *
  * Run: node --test tests/
@@ -20,7 +20,7 @@ import {
   setMcpEnabled,
   updateMcpConfig,
   writePatchList,
-} from '../lib/patch.js';
+} from '../src/patch.ts';
 
 const STDIO_CONFIG = { serverName: 'github', transport: 'stdio', command: 'npx', args: ['-y', 'server-github'] };
 

@@ -1,7 +1,7 @@
 /**
  * Pure tool-schema data + converters for the manager_* tool registration.
  *
- * The host half registers its `manager_*` tools (lib/index.js) using a compact
+ * The host half registers its `manager_*` tools (src/index.ts) using a compact
  * spec dialect: parameters are `{ name: { type, required?, description? } }`,
  * and output values mark required fields inline with `required: true`. This
  * module owns the two converters that translate that dialect into the raw
@@ -11,81 +11,68 @@
  *
  * Everything here is PURE data / free functions — no closure over ctx, the
  * state store, or the api object — so it is independently unit-testable and
- * keeps lib/index.js focused on orchestration. Each tool's `execute`/`render`
- * halves stay in lib/index.js next to their schema.
- *
- * @module dsh-skills-mcp-group-manager/tool-schemas
+ * keeps src/index.ts focused on orchestration. Each tool's `execute`/`render`
+ * halves stay in src/index.ts next to their schema.
  */
 
 /**
  * Convert the compact parameter spec to a raw JSON-schema object root.
- * @param {Record<string, unknown> | undefined} spec
- * @returns {Record<string, unknown>}
  */
-export function parameterSchema(spec) {
-  /** @type {Record<string, Record<string, unknown>>} */
-  const properties = {};
-  /** @type {string[]} */
-  const required = [];
+export function parameterSchema(spec: Record<string, unknown> | undefined): Record<string, unknown> {
+  const properties: Record<string, Record<string, unknown>> = {}
+  const required: string[] = []
   for (const [name, fieldRaw] of Object.entries(spec ?? {})) {
-    const field = /** @type {Record<string, unknown>} */ (fieldRaw);
-    const { required: isRequired, ...rest } = field;
-    properties[name] = rest;
-    if (isRequired) required.push(name);
+    const field = fieldRaw as Record<string, unknown>
+    const { required: isRequired, ...rest } = field
+    properties[name] = rest
+    if (isRequired) required.push(name)
   }
   return {
     type: 'object',
     additionalProperties: false,
     properties,
     ...(required.length > 0 ? { required } : {}),
-  };
+  }
 }
 
 /**
  * Convert a compact value spec (required flags inside properties) to raw JSON schema.
- * @param {Record<string, unknown> | undefined} spec
- * @returns {Record<string, unknown> | undefined}
  */
-export function valueSchema(spec) {
-  if (spec === undefined) return undefined;
-  /**
-   * @param {unknown} node
-   * @returns {any}
-   */
-  const convert = (node) => {
-    if (node === null || typeof node !== 'object' || Array.isArray(node)) return node;
-    /** @type {Record<string, unknown>} */
-    const out = {};
-    const required = [];
-    for (const [key, value] of Object.entries(node)) {
-      if (key === 'required' && value === true) continue; // hoisted to this level
-      if (key === 'properties' && typeof value === 'object') {
-        /** @type {Record<string, unknown>} */
-        const props = {};
-        for (const [pname, pnode] of Object.entries(value)) {
-          if (pnode !== null && typeof pnode === 'object' && pnode.required === true) {
-            required.push(pname);
-            const { required: _drop, ...rest } = pnode;
-            props[pname] = convert(rest);
+export function valueSchema(spec: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (spec === undefined) return undefined
+  const convert = (node: unknown): unknown => {
+    if (node === null || typeof node !== 'object' || Array.isArray(node)) return node
+    const out: Record<string, unknown> = {}
+    const required: string[] = []
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === 'required' && value === true) continue // hoisted to this level
+      if (key === 'properties' && typeof value === 'object' && value !== null) {
+        const props: Record<string, unknown> = {}
+        for (const [pname, pnode] of Object.entries(value as Record<string, unknown>)) {
+          if (pnode !== null && typeof pnode === 'object' && !Array.isArray(pnode)
+            && (pnode as Record<string, unknown>).required === true) {
+            required.push(pname)
+            const { required: _drop, ...rest } = pnode as Record<string, unknown>
+            props[pname] = convert(rest)
           } else {
-            props[pname] = convert(pnode);
+            props[pname] = convert(pnode)
           }
         }
-        out.properties = props;
-      } else if (key === 'items' && typeof value === 'object') {
-        out.items = convert(value);
+        out.properties = props
+      } else if (key === 'items' && typeof value === 'object' && value !== null) {
+        out.items = convert(value)
       } else {
-        out[key] = value;
+        out[key] = value
       }
     }
-    if (required.length > 0) out.required = required;
-    return out;
-  };
-  return convert(spec);
+    if (required.length > 0) out.required = required
+    return out
+  }
+  return convert(spec) as Record<string, unknown>
 }
 
 /** Shared output schema of manager_session_get / manager_session_set. */
-export const sessionStateOutput = {
+export const sessionStateOutput: Record<string, unknown> = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -108,10 +95,10 @@ export const sessionStateOutput = {
     },
     effectiveGroupIds: { type: 'array', required: true, items: { type: 'string' } },
   },
-};
+}
 
 /** Shared parameter spec of manager_mcp_add / manager_mcp_update. */
-export const mcpConfigParams = {
+export const mcpConfigParams: Record<string, unknown> = {
   id: { type: 'string', required: true, description: 'Loader entry id (^[A-Za-z0-9_-]{1,64}$); unique across all loader entries.' },
   serverName: { type: 'string', required: true, description: 'Unique server name (^[A-Za-z0-9_-]{1,32}$); tools appear as mcp__<serverName>__*.' },
   transport: { type: 'string', required: true, description: '"stdio" or "streamable-http".' },
@@ -123,4 +110,4 @@ export const mcpConfigParams = {
   headers: { type: 'object', additionalProperties: true, description: 'streamable-http: extra request headers (string values).' },
   toolCallTimeoutMs: { type: 'number', description: 'Per-callTool timeout in ms (dsh-mcp-client default 60000).' },
   failOnStartupError: { type: 'boolean', description: 'Reject activation when the initial connection/sync fails.' },
-};
+}

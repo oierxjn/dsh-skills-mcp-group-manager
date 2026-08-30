@@ -24,7 +24,7 @@ test('client bundle registration id equals the package name', () => {
 });
 
 test('RPC path is consistent between host and client and uses the package name', () => {
-  const hostPath = host.match(/RPC_PATH = '([^']+)'/);
+  const hostPath = host.match(/RPC_PATH = ['"]([^'"]+)['"]/);
   const clientPath = client.match(/const RPC_PATH = '([^']+)'/);
   assert.ok(hostPath && clientPath, 'RPC paths found in both halves');
   assert.equal(hostPath[1], clientPath[1], 'host and client RPC paths must match');
