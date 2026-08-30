@@ -74,14 +74,19 @@ async function withTempHome(fn) {
   }
 }
 
-/** Invoke the registered RPC route with a JSON body; returns the envelope. */
-async function callRpc(routes, method, args) {
+/** Invoke the registered RPC route with a JSON body; returns { status, ...envelope }. */
+async function callRpc(routes, method, args, options = {}) {
   assert.equal(routes.length, 1, 'exactly one RPC route registered');
   const req = [Buffer.from(JSON.stringify({ method, args: args ?? {} }))];
+  req.headers = options.headers ?? {};
+  let status;
   let body;
-  const res = { writeHead() {}, end(chunk) { body = chunk; } };
+  const res = {
+    writeHead(code) { status = code; },
+    end(chunk) { body = chunk; },
+  };
   await routes[0].handler(req, res);
-  return JSON.parse(body);
+  return { status, ...JSON.parse(body) };
 }
 
 /**
@@ -293,6 +298,48 @@ test('manager.session.get/set RPC: follow-global, override, empty, unknown id, r
     res = await callRpc(routes, 'manager.session.get', {});
     assert.equal(res.ok, false);
     assert.equal(res.error.code, 'invalid-args');
+  });
+});
+
+// The RPC route is the browser half's only write path and accepts untrusted
+// JSON that can spawn MCP child processes (manager.mcp.add/probe). The host
+// webserver has no origin policy, so the plugin must reject cross-origin
+// browser requests itself: a cross-origin POST always carries an Origin
+// header naming the attacker's site, while the loopback-served GUI carries a
+// loopback Origin (or none, for non-browser callers).
+test('RPC route rejects cross-origin requests (CSRF guard)', async () => {
+  await withTempHome(async () => {
+    const { ctx, effects, routes } = fakeCtx();
+    apply(ctx, {});
+    effects.find((effect) => effect.label === 'mcp-skill-manager: rpc route').callback();
+
+    // Attacker origin → 403, never reaches the method table.
+    let res = await callRpc(routes, 'manager.state.get', {}, { headers: { origin: 'https://evil.example' } });
+    assert.equal(res.status, 403);
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'forbidden-origin');
+
+    // Same-origin GUI (loopback) → allowed.
+    res = await callRpc(routes, 'manager.state.get', {}, { headers: { origin: 'http://127.0.0.1:3080' } });
+    assert.equal(res.status, 200);
+    assert.equal(res.ok, true);
+    res = await callRpc(routes, 'manager.state.get', {}, { headers: { origin: 'http://localhost:3080' } });
+    assert.equal(res.ok, true);
+
+    // No Origin header (curl / another plugin) → allowed (backward compatible).
+    res = await callRpc(routes, 'manager.state.get', {});
+    assert.equal(res.status, 200);
+    assert.equal(res.ok, true);
+
+    // `Origin: null` (sandboxed iframe / file:) is not a loopback origin → rejected.
+    res = await callRpc(routes, 'manager.state.get', {}, { headers: { origin: 'null' } });
+    assert.equal(res.status, 403);
+    assert.equal(res.error.code, 'forbidden-origin');
+
+    // URL userinfo smuggling must not sneak past the hostname check.
+    res = await callRpc(routes, 'manager.state.get', {}, { headers: { origin: 'http://evil.example@127.0.0.1:3080' } });
+    assert.equal(res.status, 403);
+    assert.equal(res.error.code, 'forbidden-origin');
   });
 });
 
