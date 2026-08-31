@@ -83,7 +83,7 @@ dsh plugin --profile web remove dsh-skills-mcp-group-manager
 宿主半与客户端半均为 TypeScript 源码,经官方同款两链路构建:两个 `tsc` 分别产出 `lib/types/*` 与 `lib/types/client/*`,tsdown 再打包为 `lib/index.js`(host ESM)与 `lib/client.js`(client 经典脚本)。**`lib/` 整体 gitignore**,构建产物不提交;npm/git 安装与 `npm pack` 时由 `prepare` 自动重建,`link:` 安装前需手动 `npm run build`。
 
 ```bash
-npm install           # 开发依赖(typescript、tsdown、tsx、@types/react、@types/node);装机依赖用 --legacy-peer-deps(见 package.json 说明)
+npm install           # 开发依赖(typescript、tsdown、tsx、@types/js-yaml、@types/node、@types/react);装机依赖用 --legacy-peer-deps(见 package.json 说明)
 npm run typecheck     # 两个 tsc --noEmit(host + client),当前 0 错误
 npm test              # build 后 node --import tsx --test tests/*.test.mjs,行为锚点
 npm run build         # tsc && tsc -p tsconfig.client.json && tsdown,生成 lib/
@@ -93,7 +93,7 @@ npm run prepublishOnly # = typecheck + test(npm publish 前自动触发)
 
 约定:
 
-- **共享契约集中在 `src/types.ts`**(仅类型模块,`import type { ... } from './types.ts'` 完全擦除,不产生运行时代码);宿主平台面(注入的 skills/tools/agents/loader/webServer 服务)在 `types/dsh.d.ts` 以全局环境声明描述。
+- **共享契约集中在 `src/types.ts`**(仅类型模块,`import type { ... } from './types.ts'` 完全擦除,不产生运行时代码);宿主平台面(注入的 skills/tools/agents/loader/webServer 服务)在 `types/dsh.d.ts` 以全局环境声明描述,浏览器平台面(`apply` 上下文 / locale / slots)在 `types/dsh-client.d.ts` 描述。
 - **类型转换只出现在边界**:不可信 JSON 入口(`args as unknown as X`)、惰性加载的第三方库(MCP SDK 的 exactOptionalPropertyTypes 不兼容处)、以及"运行时已由校验保证"的窄化点,均以显式转换并附注释。
 - **`tests/**` 不在 tsc 范围内**:测试的价值在行为(以 `node --test` 为锚点),其 mock 双对象若按严格检查标注需要为宿主内部面发明完整类型,收益低于噪声;client 半由独立的 `tsconfig.client.json` 检查(DOM lib、`types: []`,仅经 `@types/react` 提供 react 类型)。
 
