@@ -39,9 +39,9 @@ dsh plugin --profile web add link:E:\path\to\dsh-skills-mcp-group-manager
 # 重启 web profile 进程后生效(当前 GUI 由 dsh web 提供,重启后刷新页面)
 ```
 
-> **为什么无需额外步骤?** 宿主半插件为 TypeScript 源码,构建产物(单文件 `lib/index.js` + `lib/types/*.d.ts`)已提交到 git,git 安装无需现场构建;仅有的两个运行时依赖(`js-yaml`、`@modelcontextprotocol/sdk`,见 `dependencies`)在安装时由 pnpm 自动落盘,且均为惰性加载——即使 `link:` 安装缺少 node_modules,插件与分组功能仍可启动,仅 MCP 编辑/探测会报出明确错误。
+> **为什么无需额外步骤?** 插件两个半侧均为 TypeScript 源码(`src/**`),构建产物统一落到 gitignored 的 `lib/`(`lib/index.js` 宿主半 + `lib/client.js` 客户端半 + `lib/types/*.d.ts` 声明)。npm/git 安装与 `npm pack` 时由 `prepare` 脚本自动执行 `npm run build` 重新生成,无需提交产物;仅有的两个运行时依赖(`js-yaml`、`@modelcontextprotocol/sdk`,见 `dependencies`)在安装时落盘,且均为惰性加载——即使 `link:` 安装缺少 node_modules,插件与分组功能仍可启动,仅 MCP 编辑/探测会报出明确错误。`link:` 安装不会触发 `prepare`,需先手动 `npm run build`。
 
-> **npm 包说明** 本仓库是自行维护的 fork,不发布到 npm registry;`dsh plugin add dsh-skills-mcp-group-manager`(npm 包名)安装的是上游版本,不含本 fork 的改动。
+> **npm 包说明** 本仓库维护自身的 fork;如需发布到 npm,先 `npm run build` 生成 `lib/`,再 `npm publish`(发布前自动跑 `prepublishOnly` = typecheck + test)。`dsh plugin add dsh-skills-mcp-group-manager` 安装的是 registry 上的版本,不含本地 fork 改动。
 
 ## 🗑️ 卸载 / Uninstall(数据随插件一并删除)
 
@@ -66,32 +66,36 @@ dsh plugin --profile web remove dsh-skills-mcp-group-manager
 | `src/types.ts` | 共享类型契约(仅类型,零运行时):ManagerState / McpServerConfig / PatchRow / 各 RPC 参数等 |
 | `src/errors.ts` | 结构化错误 `McpError(code, message, fields?)`(RPC/tool 面统一错误码) |
 | `src/tool-schemas.ts` | 纯工具 schema 数据 + `parameterSchema`/`valueSchema` 转换器 |
+| `src/client/index.ts` | Client 半插件 TypeScript 源码:设置页「技能分组」「MCP」两个分区 + 会话头部按会话分组 popover(可新建分组);MCP 卡片列表(状态徽标/探测/编辑) |
 | `lib/index.js` | **构建产物**(`tsc → lib/types → tsdown`):host 半的单文件 ESM bundle(loader 的 import 目标) |
-| `lib/types/*.d.ts` | **构建产物**:host 半的声明(发布面) |
-| `lib/client.js` | Client 半插件(仍为手写经典脚本):设置页「技能分组」「MCP」两个分区 + 会话头部按会话分组 popover(可新建分组);MCP 卡片列表(状态徽标/探测/编辑) |
+| `lib/client.js` | **构建产物**:client 半的经典客户端脚本(`window.__ModuleLoader__.load({ id, factory })`) |
+| `lib/types/*.d.ts` | **构建产物**:两侧的声明(发布面) |
 | `scripts/cleanup.mjs` | `postuninstall` 清理脚本 |
 | `types/dsh.d.ts` | DSH 宿主平台面的环境声明(注入服务的最小成员面,全局可见) |
-| `tsconfig.json` | `tsc` 构建配置(rootDir `src`,outDir `lib/types`) |
-| `tsdown.config.ts` | host bundle 配置(entry `lib/types/index.js` → `lib/index.js`;生产依赖 external,其余内联) |
+| `types/dsh-client.d.ts` | DSH 浏览器平台面的环境声明(`apply` 上下文 / 本地化 / slots) |
+| `tsconfig.json` | host 半 `tsc` 构建配置(rootDir `src`,outDir `lib/types`,排除 `src/client`) |
+| `tsconfig.client.json` | client 半 `tsc` 构建配置(DOM lib,rootDir `src`,outDir `lib/types`) |
+| `tsdown.config.ts` | 双侧 bundle 配置(host: entry `lib/types/index.js` → `lib/index.js`;client: entry `lib/types/client/index.js` → `lib/client.js`;生产依赖/平台种子词 external,其余内联) |
 | `cordis.patch.yml` | bundle 补丁,把插件行插入宿主组合 |
 
 ## 🔨 构建与类型检查 / Build & Type Checking
 
-宿主半侧为 TypeScript 源码,经官方同款链路构建:tsc 产出 `lib/types/*.{js,d.ts,map}`,tsdown 再打包为单文件 `lib/index.js`。**构建产物已提交到 git**(本 fork 不发布 npm,git 安装无需现场构建);`lib/types/*.js` 与 `*.map` 为中间产物,不入库。
+宿主半与客户端半均为 TypeScript 源码,经官方同款两链路构建:两个 `tsc` 分别产出 `lib/types/*` 与 `lib/types/client/*`,tsdown 再打包为 `lib/index.js`(host ESM)与 `lib/client.js`(client 经典脚本)。**`lib/` 整体 gitignore**,构建产物不提交;npm/git 安装与 `npm pack` 时由 `prepare` 自动重建,`link:` 安装前需手动 `npm run build`。
 
 ```bash
-npm install          # 开发依赖(typescript、tsdown、tsx、@types/*);装机依赖用 --legacy-peer-deps(见 package.json 说明)
-npm run typecheck    # tsc --noEmit,检查 src/**/*.ts,当前 0 错误
-npm test             # node --import tsx --test tests/*.test.mjs,行为锚点
-npm run build        # tsc && tsdown,重新生成 lib/index.js + lib/types/*.d.ts
-npm run check:built  # build 后 git diff --exit-code lib/,防产物漂移
+npm install           # 开发依赖(typescript、tsdown、tsx、@types/js-yaml、@types/node、@types/react);装机依赖用 --legacy-peer-deps(见 package.json 说明)
+npm run typecheck     # 两个 tsc --noEmit(host + client),当前 0 错误
+npm test              # build 后 node --import tsx --test tests/*.test.mjs,行为锚点
+npm run build         # tsc && tsc -p tsconfig.client.json && tsdown,生成 lib/
+npm run prepare       # = build(install/pack 自动触发)
+npm run prepublishOnly # = typecheck + test(npm publish 前自动触发)
 ```
 
 约定:
 
-- **共享契约集中在 `src/types.ts`**(仅类型模块,`import type { ... } from './types.ts'` 完全擦除,不产生运行时代码);宿主平台面(注入的 skills/tools/agents/loader/webServer 服务)在 `types/dsh.d.ts` 以全局环境声明描述。
+- **共享契约集中在 `src/types.ts`**(仅类型模块,`import type { ... } from './types.ts'` 完全擦除,不产生运行时代码);宿主平台面(注入的 skills/tools/agents/loader/webServer 服务)在 `types/dsh.d.ts` 以全局环境声明描述,浏览器平台面(`apply` 上下文 / locale / slots)在 `types/dsh-client.d.ts` 描述。
 - **类型转换只出现在边界**:不可信 JSON 入口(`args as unknown as X`)、惰性加载的第三方库(MCP SDK 的 exactOptionalPropertyTypes 不兼容处)、以及"运行时已由校验保证"的窄化点,均以显式转换并附注释。
-- **`tests/**` 不在 tsc 范围内**:测试的价值在行为(以 `node --test` 为锚点),其 mock 双对象若按严格检查标注需要为宿主内部面发明完整类型,收益低于噪声;`lib/client.js` 同样暂未纳入(经典脚本加载格式,属后续切片)。
+- **`tests/**` 不在 tsc 范围内**:测试的价值在行为(以 `node --test` 为锚点),其 mock 双对象若按严格检查标注需要为宿主内部面发明完整类型,收益低于噪声;client 半由独立的 `tsconfig.client.json` 检查(DOM lib、`types: []`,仅经 `@types/react` 提供 react 类型)。
 
 
 ## 🧵 按会话分组 / Per-session Groups

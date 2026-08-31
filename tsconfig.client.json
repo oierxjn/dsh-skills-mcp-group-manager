@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "rootDir": "src",
@@ -19,8 +19,8 @@
     "rewriteRelativeImportExtensions": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": []
   },
-  "include": ["src/**/*.ts", "types/dsh.d.ts"],
-  "exclude": ["node_modules", "src/client", "tests/**/*.mjs", "lib"]
+  "include": ["src/client/**/*.ts", "types/dsh-client.d.ts"],
+  "exclude": ["node_modules", "lib"]
 }
