@@ -18,21 +18,23 @@ const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'
 const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8');
 
 test('client bundle registration id equals the package name', () => {
-  const match = client.match(/__ModuleLoader__\.load\(\{\s*\n?\s*id:\s*'([^']+)'/);
+  const match = client.match(/__ModuleLoader__\.load\(\{\s*\n?\s*id:\s*["']([^"']+)["']/);
   assert.ok(match, 'client bundle registration id found');
   assert.equal(match[1], pkg.name, `registration id must be "${pkg.name}" (client-modules resolves bundles by package id)`);
 });
 
 test('RPC path is consistent between host and client and uses the package name', () => {
   const hostPath = host.match(/RPC_PATH = ['"]([^'"]+)['"]/);
-  const clientPath = client.match(/const RPC_PATH = '([^']+)'/);
+  const clientPath = client.match(/const RPC_PATH = ["']([^"']+)["']/);
   assert.ok(hostPath && clientPath, 'RPC paths found in both halves');
   assert.equal(hostPath[1], clientPath[1], 'host and client RPC paths must match');
   assert.ok(hostPath[1].includes(pkg.name), `RPC path should use the package name "${pkg.name}" (got ${hostPath[1]})`);
 });
 
 test('style tag plugin identity uses the package name', () => {
-  assert.ok(client.includes(`dataset.plugin = '${pkg.name}'`), 'style tag data-plugin uses the package name');
+  const pluginMatch = client.match(/dataset\.plugin = ["']([^"']+)["']/);
+  assert.ok(pluginMatch, 'style tag data-plugin uses the package name');
+  assert.equal(pluginMatch[1], pkg.name, 'style tag data-plugin uses the package name');
 });
 
 test('skill add/remove wiring passes (id, names) correctly (no id-character iteration)', () => {

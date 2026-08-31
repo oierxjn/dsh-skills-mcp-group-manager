@@ -11,6 +11,7 @@
       "default": "./lib/index.js"
     },
     "./client": {
+      "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
@@ -24,10 +25,11 @@
   ],
   "scripts": {
     "postuninstall": "node scripts/cleanup.mjs",
-    "build": "tsc && tsdown",
-    "test": "node --import tsx --test tests/*.test.mjs",
-    "typecheck": "tsc --noEmit",
-    "check:built": "npm run build && git diff --exit-code -- lib/"
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown",
+    "test": "npm run build && node --import tsx --test tests/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
   "license": "MIT",
   "keywords": [
@@ -82,6 +84,7 @@
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.4.0",
+    "@types/react": "^18.3.1",
     "tsdown": "^0.22.2",
     "tsx": "^4.22.4",
     "typescript": "^7.0.2"
