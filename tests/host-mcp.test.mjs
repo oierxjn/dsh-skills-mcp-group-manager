@@ -17,7 +17,8 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { apply } from '../src/index.ts';
 import { writePatchList, readPatchList } from '../src/patch.ts';
-import { MCP_CLIENT_PACKAGE } from '../src/status.ts';
+import { MCP_CLIENT_PACKAGE, toServerConfig } from '../src/status.ts';
+import { valueSchema } from '../src/tool-schemas.ts';
 
 /** Fake loader entry (the subset of the composed-tree API the plugin reads). */
 function loaderEntry(id, name, config) {
@@ -72,6 +73,77 @@ function assertErrorCode(promise, code, message) {
     return true;
   }, message);
 }
+
+/**
+ * Mirror of the harness tool-output validator (dsh-session snapshotJsonValue):
+ * a present-but-undefined own property makes the whole value non-lossless
+ * JSON, which rejects the tool call outright. Walk own enumerable keys.
+ */
+function assertLossless(node, path) {
+  if (node === undefined) {
+    throw new Error(`output${path} is undefined — tool output is not lossless JSON`);
+  }
+  if (Array.isArray(node)) {
+    node.forEach((item, index) => assertLossless(item, `${path}[${index}]`));
+  } else if (node !== null && typeof node === 'object') {
+    for (const [key, value] of Object.entries(node)) assertLossless(value, `${path}.${key}`);
+  }
+}
+
+test('toServerConfig: minimal raw config → no undefined-valued keys survive (lossless-JSON safe)', () => {
+  const config = toServerConfig({ serverName: 'gh', transport: 'stdio', command: 'npx' });
+  assert.deepEqual(JSON.parse(JSON.stringify(config)), config, 'JSON round-trip must be lossless');
+  assertLossless(config, '');
+  assert.equal(config.url, undefined, 'unconfigured url reads as undefined');
+  assert.equal('url' in config, false, 'unconfigured url must be absent, not present-with-undefined');
+});
+
+test('toServerConfig: fully-populated raw config → every configured key present with its value', () => {
+  const raw = {
+    serverName: 'web', transport: 'streamable-http', url: 'http://127.0.0.1:24440/mcp',
+    command: 'node', args: ['server.js'], env: { A: '1' }, cwd: '/srv',
+    headers: { 'x-a': 'b' }, toolCallTimeoutMs: 1234, failOnStartupError: true,
+    reconnect: { initialDelayMs: 100 },
+  };
+  const config = toServerConfig(raw);
+  assertLossless(config, '');
+  for (const [key, value] of Object.entries(raw)) assert.deepEqual(config[key], value, `key "${key}" preserved`);
+});
+
+test('toServerConfig: empty/garbage raw config → safe defaults, no undefined values', () => {
+  for (const raw of [undefined, null, {}, 'nope', 42]) {
+    const config = toServerConfig(raw);
+    assertLossless(config, '');
+    assert.equal(config.serverName, '');
+    assert.equal(config.transport, 'streamable-http');
+  }
+});
+
+test('manager_mcp_list: output is lossless-JSON safe and schema-complete (issue #10)', async () => {
+  const entries = [
+    loaderEntry('include:gh', MCP_CLIENT_PACKAGE, { serverName: 'gh', transport: 'stdio', command: 'npx' }),
+    loaderEntry('include:web', MCP_CLIENT_PACKAGE, {
+      serverName: 'web', transport: 'streamable-http', url: 'http://127.0.0.1:24440/mcp', env: { A: '1' },
+    }),
+  ];
+  await withPlugin(entries, async ({ toolMap }) => {
+    const value = await toolMap.manager_mcp_list.execute({});
+    assertLossless(value, '');
+    assert.deepEqual(JSON.parse(JSON.stringify(value)), value, 'JSON round-trip must be lossless');
+    const gh = value.servers.find((server) => server.id === 'gh');
+    assert.equal(gh.command, 'npx', 'configured keys keep their values');
+    assert.equal('url' in gh, false, 'unconfigured optional keys must be absent');
+    // Second harness layer: the registered output schema uses
+    // additionalProperties: false, so every returned item key must be declared
+    // in the *converted* schema (valueSchema is what the registry sees).
+    const itemProps = valueSchema(toolMap.manager_mcp_list.output.schema).properties.servers.items.properties;
+    for (const server of value.servers) {
+      for (const key of Object.keys(server)) {
+        assert.ok(key in itemProps, `servers[] item key "${key}" must be declared in the output schema`);
+      }
+    }
+  });
+});
 
 test('mcpToggle: unknown id → not-found, no patch file is created', async () => {
   await withPlugin([], async ({ toolMap, patchFile }) => {

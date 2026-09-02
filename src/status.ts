@@ -65,18 +65,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Normalize a raw mcp-client row config into the shared shape. */
 export function toServerConfig(raw: unknown): McpServerConfig {
   const cfg = (raw ?? {}) as Record<string, unknown>
+  // Conditional spreads, not `key: cond ? val : undefined`: tool outputs are
+  // validated as lossless JSON, and a present-but-undefined own property makes
+  // the whole value fail that validation (issue #10). Optional keys must be
+  // absent when unconfigured, not present with an undefined value.
   return {
     serverName: typeof cfg.serverName === 'string' ? cfg.serverName : '',
     transport: cfg.transport === 'stdio' ? 'stdio' : 'streamable-http',
-    url: typeof cfg.url === 'string' ? cfg.url : undefined,
-    command: typeof cfg.command === 'string' ? cfg.command : undefined,
-    args: Array.isArray(cfg.args) ? cfg.args : undefined,
-    env: isRecord(cfg.env) ? cfg.env as Record<string, string> : undefined,
-    cwd: typeof cfg.cwd === 'string' ? cfg.cwd : undefined,
-    headers: isRecord(cfg.headers) ? cfg.headers as Record<string, string> : undefined,
-    toolCallTimeoutMs: typeof cfg.toolCallTimeoutMs === 'number' ? cfg.toolCallTimeoutMs : undefined,
-    failOnStartupError: typeof cfg.failOnStartupError === 'boolean' ? cfg.failOnStartupError : undefined,
-    reconnect: isRecord(cfg.reconnect) ? cfg.reconnect : undefined,
+    ...(typeof cfg.url === 'string' ? { url: cfg.url } : {}),
+    ...(typeof cfg.command === 'string' ? { command: cfg.command } : {}),
+    ...(Array.isArray(cfg.args) ? { args: cfg.args } : {}),
+    ...(isRecord(cfg.env) ? { env: cfg.env as Record<string, string> } : {}),
+    ...(typeof cfg.cwd === 'string' ? { cwd: cfg.cwd } : {}),
+    ...(isRecord(cfg.headers) ? { headers: cfg.headers as Record<string, string> } : {}),
+    ...(typeof cfg.toolCallTimeoutMs === 'number' ? { toolCallTimeoutMs: cfg.toolCallTimeoutMs } : {}),
+    ...(typeof cfg.failOnStartupError === 'boolean' ? { failOnStartupError: cfg.failOnStartupError } : {}),
+    ...(isRecord(cfg.reconnect) ? { reconnect: cfg.reconnect } : {}),
   }
 }
 
