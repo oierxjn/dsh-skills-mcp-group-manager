@@ -167,6 +167,15 @@ test('toServerConfig: composite values containing non-lossless content are omitt
   assert.equal('reconnect' in toServerConfig({ reconnect: cyclic }), false, 'cyclic reconnect must be omitted');
   assert.equal('reconnect' in toServerConfig({ reconnect: { initialDelayMs: 100 } }), true, 'plain reconnect is kept');
 });
+
+test('toServerConfig: non-plain objects (Date/Map instances) are omitted from the projection', () => {
+  // js-yaml resolves !!timestamp scalars to Date instances, so a user-authored
+  // row can carry them just like `.inf` scalars.
+  assert.equal('reconnect' in toServerConfig({ reconnect: { since: new Date('2024-01-01T00:00:00Z') } }), false, 'reconnect with a Date must be omitted');
+  assert.equal('env' in toServerConfig({ env: { nested: { deeper: new Map() } } }), false, 'deeply nested non-plain object must be omitted');
+  assert.equal('reconnect' in toServerConfig({ reconnect: { since: '2024-01-01T00:00:00Z' } }), true, 'string-valued reconnect is kept');
+  assert.throws(() => assertLossless({ d: new Date() }, ''), 'the test helper must reject non-plain objects');
+});
 test('manager_mcp_list: output is lossless-JSON safe and schema-complete (issue #10)', async () => {
   const entries = [
     loaderEntry('include:gh', MCP_CLIENT_PACKAGE, { serverName: 'gh', transport: 'stdio', command: 'npx' }),

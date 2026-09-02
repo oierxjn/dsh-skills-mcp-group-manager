@@ -85,11 +85,14 @@ function isLossless(value: unknown): boolean {
         && Reflect.ownKeys(node).length === node.length + 1
         && node.every(walk)
     } else {
+      // Non-plain prototypes (Date — js-yaml resolves !!timestamp scalars to
+      // it — Map, class instances, …) are rejected, never treated as
+      // key-less passes: the harness rejects them too.
       const proto = Object.getPrototypeOf(node)
-      const keys = proto === Object.prototype || proto === null ? Reflect.ownKeys(node) : []
-      ok = keys.every((key) => typeof key === 'string'
-        && Object.prototype.propertyIsEnumerable.call(node, key)
-        && walk((node as Record<string, unknown>)[key]))
+      ok = (proto === Object.prototype || proto === null)
+        && Reflect.ownKeys(node).every((key) => typeof key === 'string'
+          && Object.prototype.propertyIsEnumerable.call(node, key)
+          && walk((node as Record<string, unknown>)[key]))
     }
     ancestors.delete(node)
     return ok
