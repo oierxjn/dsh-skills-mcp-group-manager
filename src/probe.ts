@@ -53,7 +53,7 @@ export async function probeServer(config: Partial<McpServerConfig>, timeoutMs = 
       import('@modelcontextprotocol/sdk/client/streamableHttp.js'),
     ])
     client = new Client(
-      { name: 'dsh-skills-mcp-group-manager-probe', version: '0.1.0' },
+      { name: '@jkljkluiouio/dsh-skills-mcp-group-manager-probe', version: '0.1.0' },
       { capabilities: {} },
     )
     let transport

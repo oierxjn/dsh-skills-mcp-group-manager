@@ -17,7 +17,7 @@
  * a popover that edits ONLY that session's group selection (override ?? the
  * global toggles) via `manager.session.get/set` and can create a new group in
  * place; global management lives in the settings sections. Everything calls
- * the host RPC route `POST /plugins/dsh-skills-mcp-group-manager/rpc` (bundle
+ * the host RPC route `POST /plugins/@jkljkluiouio/dsh-skills-mcp-group-manager/rpc` (bundle
  * plugins have no `harness.handle`/`host.call`; the host serves the same
  * business logic over one JSON POST route with body { method, args } →
  * { ok, value } | { ok: false, error: { code, message, fields? } }). MCP
@@ -43,7 +43,7 @@ import type { ManagerState, ProbeOutcome, ServerStatus, SkillGroup } from '../ty
 const h = react.createElement as unknown as (type: unknown, props?: any, ...children: unknown[]) => unknown
 
 // ── constants ──────────────────────────────────────────────────────────────
-const RPC_PATH = '/plugins/dsh-skills-mcp-group-manager/rpc'
+const RPC_PATH = '/plugins/@jkljkluiouio/dsh-skills-mcp-group-manager/rpc'
 // MUST stay in sync with the host's src/state.ts SERVER_NAME_PATTERN /
 // ENTRY_ID_PATTERN: this browser bundle cannot import the host module, so
 // the two domains are intentionally duplicated. If the host schema changes,
@@ -1615,8 +1615,8 @@ export function apply(ctx: ClientPluginContext): void {
   ctx.effect(() => {
     if (typeof document === 'undefined') return
     const tag = document.createElement('style')
-    tag.dataset.plugin = 'dsh-skills-mcp-group-manager'
-    tag.dataset.pluginCss = 'dsh-skills-mcp-group-manager/panel.css'
+    tag.dataset.plugin = '@jkljkluiouio/dsh-skills-mcp-group-manager'
+    tag.dataset.pluginCss = '@jkljkluiouio/dsh-skills-mcp-group-manager/panel.css'
     tag.textContent = PANEL_CSS
     document.head.appendChild(tag)
     return () => { tag.remove() }

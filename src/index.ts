@@ -30,7 +30,7 @@
  *  5. The RPC surface for the browser half. NOTE: `harness.handle`/`host.call`
  *     exist only for sandboxed dynamic plugins; a bundle plugin exposes JSON
  *     methods over the web server instead. The method names are served as a
- *     single POST route `/plugins/dsh-skills-mcp-group-manager/rpc` with body
+ *     single POST route `/plugins/@jkljkluiouio/dsh-skills-mcp-group-manager/rpc` with body
  *     { method, args } → { ok, value } | { ok: false, error }. The error is
  *     structured: { code, message, fields? } where `fields` carries
  *     field-level validation messages for the form to display inline.
@@ -104,7 +104,7 @@ const catalogReentry = new AsyncLocalStorage<unknown>()
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const
 /** Base path of the browser-half RPC route. */
-const RPC_PATH = '/plugins/dsh-skills-mcp-group-manager/rpc'
+const RPC_PATH = '/plugins/@jkljkluiouio/dsh-skills-mcp-group-manager/rpc'
 /** Max RPC request body bytes. */
 const MAX_RPC_BODY_BYTES = 64 * 1024
 

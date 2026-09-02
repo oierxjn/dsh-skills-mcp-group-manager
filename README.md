@@ -30,7 +30,10 @@
 ## 📦 安装 / Install
 
 ```bash
-# 从本 fork 的 git 仓库安装(dsh plugin add 底层是 pnpm add,支持 git URL)
+# 从 npm 安装本 fork 发布的 scoped 包
+dsh plugin --profile web add @jkljkluiouio/dsh-skills-mcp-group-manager
+
+# 或从本 fork 的 git 仓库安装(dsh plugin add 底层是 pnpm add,支持 git URL)
 dsh plugin --profile web add https://github.com/oierxjn/dsh-skills-mcp-group-manager
 
 # 或本地开发时从克隆目录 link: 安装
@@ -41,12 +44,12 @@ dsh plugin --profile web add link:E:\path\to\dsh-skills-mcp-group-manager
 
 > **为什么无需额外步骤?** 插件两个半侧均为 TypeScript 源码(`src/**`),构建产物统一落到 gitignored 的 `lib/`(`lib/index.js` 宿主半 + `lib/client.js` 客户端半 + `lib/types/*.d.ts` 声明)。npm/git 安装与 `npm pack` 时由 `prepare` 脚本自动执行 `npm run build` 重新生成,无需提交产物;仅有的两个运行时依赖(`js-yaml`、`@modelcontextprotocol/sdk`,见 `dependencies`)在安装时落盘,且均为惰性加载——即使 `link:` 安装缺少 node_modules,插件与分组功能仍可启动,仅 MCP 编辑/探测会报出明确错误。`link:` 安装不会触发 `prepare`,需先手动 `npm run build`。
 
-> **npm 包说明** 本仓库维护自身的 fork;如需发布到 npm,先 `npm run build` 生成 `lib/`,再 `npm publish`(发布前自动跑 `prepublishOnly` = typecheck + test)。`dsh plugin add dsh-skills-mcp-group-manager` 安装的是 registry 上的版本,不含本地 fork 改动。
+> **npm 包说明** 本仓库维护自身的 fork,以 **scoped 包名 `@jkljkluiouio/dsh-skills-mcp-group-manager`** 发布到 npm(registry 上的非 scoped 名 `dsh-skills-mcp-group-manager` 属于上游 SeverusZh,fork 不能同名发布;包名是承重结构——client bundle 注册 id、RPC 路由、样式标记均使用它,由 `tests/package-name.test.mjs` 守护一致性)。发新版:先 `npm run build` 生成 `lib/`,再 `npm publish --access public`(发布前自动跑 `prepublishOnly` = typecheck + test)。`dsh plugin add dsh-skills-mcp-group-manager` 安装的是上游的 registry 版本,不含 fork 改动。
 
 ## 🗑️ 卸载 / Uninstall(数据随插件一并删除)
 
 ```bash
-dsh plugin --profile web remove dsh-skills-mcp-group-manager
+dsh plugin --profile web remove @jkljkluiouio/dsh-skills-mcp-group-manager
 ```
 
 卸载时 pnpm 会执行包的 `postuninstall` 脚本(`scripts/cleanup.mjs`),删除整个状态目录 `~/.dsh/mcp-skill-manager/`(含 `state.json`),分组随插件一同移除。手动删除亦可:`rm -rf ~/.dsh/mcp-skill-manager`。注意:MCP 服务器行写在 profile 的 `cordis.patch.yml` 里,卸载不会触碰该文件,需要时在设置页「MCP」分区或文件中手动删除。
@@ -57,7 +60,7 @@ dsh plugin --profile web remove dsh-skills-mcp-group-manager
 
 | 文件 | 说明 |
 | --- | --- |
-| `src/index.ts` | Host 半插件:状态模型、skill 目录过滤(shadow provider `skill-manager-filter`,按会话解析覆写)、MCP 枚举/启停/增删改(编辑 `cordis.patch.yml`,HMR 热生效)与连接探测、15 个 `manager_*` 工具、RPC 路由 `/plugins/dsh-skills-mcp-group-manager/rpc` |
+| `src/index.ts` | Host 半插件:状态模型、skill 目录过滤(shadow provider `skill-manager-filter`,按会话解析覆写)、MCP 枚举/启停/增删改(编辑 `cordis.patch.yml`,HMR 热生效)与连接探测、15 个 `manager_*` 工具、RPC 路由 `/plugins/@jkljkluiouio/dsh-skills-mcp-group-manager/rpc` |
 | `src/state.ts` | 纯状态逻辑(零依赖):分组操作、按会话注入集合(`enabledSkillNamesFor`)+ MCP 配置的字段级校验 |
 | `src/store.ts` | 分组与会话覆写状态存储(原子写 + 序列化写链 + 容错读取)+ 共享原子写辅助 |
 | `src/patch.ts` | `cordis.patch.yml` 读写(insert 行 / `{id,name,disabled}` 覆写行,`!!js` 保留,原子写) |

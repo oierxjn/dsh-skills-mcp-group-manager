@@ -68,7 +68,7 @@ function evaluateBundle() {
 
 test('bundle registers under the package id and exports a plugin face', () => {
   const { registration, plugin } = evaluateBundle();
-  assert.equal(registration.id, 'dsh-skills-mcp-group-manager');
+  assert.equal(registration.id, '@jkljkluiouio/dsh-skills-mcp-group-manager');
   assert.equal(typeof plugin.apply, 'function');
   assert.deepEqual(plugin.inject, ['slots', 'locale', 'inputTriggers', 'connection', 'sessions']);
 });
@@ -109,8 +109,8 @@ test('apply() wires locale, stylesheet, and the slot registrations', () => {
 
   // stylesheet: one style tag, fiber-scoped disposer removes it
   assert.equal(styleTags.length, 1);
-  assert.equal(styleTags[0].dataset.plugin, 'dsh-skills-mcp-group-manager');
-  assert.equal(styleTags[0].dataset.pluginCss, 'dsh-skills-mcp-group-manager/panel.css');
+  assert.equal(styleTags[0].dataset.plugin, '@jkljkluiouio/dsh-skills-mcp-group-manager');
+  assert.equal(styleTags[0].dataset.pluginCss, '@jkljkluiouio/dsh-skills-mcp-group-manager/panel.css');
   assert.ok(styleTags[0].textContent.includes('.msm-settings'));
   assert.ok(!styleTags[0].textContent.includes('.msm-panel'), 'panel chrome styles are gone');
   assert.ok(styleTags[0].textContent.includes('var(--dsw-alias-'));

@@ -3,5 +3,5 @@
 # shared tools registry, per-agent skill-catalog filtering, and MCP toggling.
 - insert:
     - id: mcp-skill-manager
-      name: 'dsh-skills-mcp-group-manager'
+      name: '@jkljkluiouio/dsh-skills-mcp-group-manager'
       config: {}
