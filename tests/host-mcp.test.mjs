@@ -176,16 +176,28 @@ test('toServerConfig: non-plain objects (Date/Map instances) are omitted from th
   assert.equal('reconnect' in toServerConfig({ reconnect: { since: '2024-01-01T00:00:00Z' } }), true, 'string-valued reconnect is kept');
   assert.throws(() => assertLossless({ d: new Date() }, ''), 'the test helper must reject non-plain objects');
 });
+
+test('toServerConfig: args items must be strings to match the declared schema', () => {
+  // A directly YAML-authored row `args: [8080]` resolves the unquoted number,
+  // which survives isLossless but violates the output schema's
+  // `items: { type: 'string' }` (and the validateMcpConfig contract).
+  assert.equal('args' in toServerConfig({ args: [8080] }), false, 'numeric args must be omitted');
+  assert.equal('args' in toServerConfig({ args: ['--x', 1] }), false, 'mixed-type args must be omitted');
+  assert.deepEqual(toServerConfig({ args: ['--x', '8080'] }).args, ['--x', '8080'], 'string args are kept');
+});
+
 test('manager_mcp_list: output is lossless-JSON safe and schema-complete (issue #10)', async () => {
   const entries = [
     loaderEntry('include:gh', MCP_CLIENT_PACKAGE, { serverName: 'gh', transport: 'stdio', command: 'npx' }),
     loaderEntry('include:web', MCP_CLIENT_PACKAGE, {
       serverName: 'web', transport: 'streamable-http', url: 'http://127.0.0.1:24440/mcp', env: { A: '1' },
     }),
-    // A user-authored row with `.inf` (js-yaml → Infinity) must not break the
-    // whole listing — the key is omitted from the projection instead.
+    // A user-authored row with `.inf` (js-yaml → Infinity) and an unquoted
+    // numeric arg must not break the whole listing — the offending keys are
+    // omitted from the projection instead.
     loaderEntry('include:bad', MCP_CLIENT_PACKAGE, {
-      serverName: 'bad', transport: 'stdio', command: 'node', toolCallTimeoutMs: Number.POSITIVE_INFINITY,
+      serverName: 'bad', transport: 'stdio', command: 'node',
+      toolCallTimeoutMs: Number.POSITIVE_INFINITY, args: [8080],
     }),
   ];
   await withPlugin(entries, async ({ toolMap }) => {
@@ -198,6 +210,7 @@ test('manager_mcp_list: output is lossless-JSON safe and schema-complete (issue 
     const bad = value.servers.find((server) => server.id === 'bad');
     assert.ok(bad, 'the .inf-configured server is still listed');
     assert.equal('toolCallTimeoutMs' in bad, false, 'the non-lossless timeout is omitted');
+    assert.equal('args' in bad, false, 'the non-string args array is omitted');
     // Second harness layer: the registered output schema uses
     // additionalProperties: false, so every returned item key must be declared
     // in the *converted* schema (valueSchema is what the registry sees).

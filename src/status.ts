@@ -108,13 +108,17 @@ export function toServerConfig(raw: unknown): McpServerConfig {
   // the whole value fail that validation (issue #10). Optional keys must be
   // absent when unconfigured, not present with an undefined value. Composite
   // and number values additionally pass isLossless(): a user-authored row can
-  // carry `.inf`/`.nan`/`-0` scalars, which fail the same validation.
+  // carry `.inf`/`.nan`/`-0` scalars, which fail the same validation. `args`
+  // must also conform to its declared string-array schema (a YAML row like
+  // `args: [8080]` resolves the unquoted number); string-ness alone would not
+  // reject sparse arrays, so isLossless still gates it.
   return {
     serverName: typeof cfg.serverName === 'string' ? cfg.serverName : '',
     transport: cfg.transport === 'stdio' ? 'stdio' : 'streamable-http',
     ...(typeof cfg.url === 'string' ? { url: cfg.url } : {}),
     ...(typeof cfg.command === 'string' ? { command: cfg.command } : {}),
-    ...(Array.isArray(cfg.args) && isLossless(cfg.args) ? { args: cfg.args } : {}),
+    ...(Array.isArray(cfg.args) && isLossless(cfg.args) && cfg.args.every((item) => typeof item === 'string')
+      ? { args: cfg.args } : {}),
     ...(isRecord(cfg.env) && isLossless(cfg.env) ? { env: cfg.env as Record<string, string> } : {}),
     ...(typeof cfg.cwd === 'string' ? { cwd: cfg.cwd } : {}),
     ...(isRecord(cfg.headers) && isLossless(cfg.headers) ? { headers: cfg.headers as Record<string, string> } : {}),
