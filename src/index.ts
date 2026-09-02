@@ -860,6 +860,17 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
                 fiberPhase: { oneOf: [{ type: 'string' }, { type: 'null' }], required: true },
                 toolCount: { type: 'number', required: true },
                 userManaged: { type: 'boolean', required: true },
+                // Optional config keys — present only when the row configures
+                // them (toServerConfig omits unconfigured keys, issue #10).
+                url: { type: 'string', description: 'streamable-http: endpoint URL.' },
+                command: { type: 'string', description: 'stdio: executable command.' },
+                args: { type: 'array', items: { type: 'string' }, description: 'stdio: command arguments.' },
+                env: { type: 'object', additionalProperties: true, description: 'stdio: environment overrides.' },
+                cwd: { type: 'string', description: 'stdio: working directory of the child process.' },
+                headers: { type: 'object', additionalProperties: true, description: 'streamable-http: extra request headers.' },
+                toolCallTimeoutMs: { type: 'number', description: 'Per-callTool timeout override (ms).' },
+                failOnStartupError: { type: 'boolean', description: 'Reject activation when the initial connection/sync fails.' },
+                reconnect: { type: 'object', additionalProperties: true, description: 'Reconnect policy passthrough.' },
               },
             },
           },

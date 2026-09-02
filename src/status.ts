@@ -62,21 +62,70 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/**
+ * Whether a value survives the harness lossless-JSON tool-output boundary —
+ * a mirror of dsh-session walkJsonValue acceptance: null / boolean / string,
+ * finite non-`-0` numbers, hole-free plain arrays, plain records with
+ * enumerable string keys, no cycles. User-authored YAML rows can carry
+ * `.inf`/`.nan`/`-0` scalars (js-yaml resolves them to ±Infinity/NaN/-0), and
+ * projecting such a value fails the whole tool call, so affected config keys
+ * are omitted from the projection instead (issue #10).
+ */
+function isLossless(value: unknown): boolean {
+  const ancestors = new Set<object>()
+  const walk = (node: unknown): boolean => {
+    if (node === null || typeof node === 'boolean' || typeof node === 'string') return true
+    if (typeof node === 'number') return Number.isFinite(node) && !Object.is(node, -0)
+    if (typeof node !== 'object') return false
+    if (ancestors.has(node)) return false
+    ancestors.add(node)
+    let ok: boolean
+    if (Array.isArray(node)) {
+      ok = Object.getPrototypeOf(node) === Array.prototype
+        && Reflect.ownKeys(node).length === node.length + 1
+        && node.every(walk)
+    } else {
+      // Non-plain prototypes (Date — js-yaml resolves !!timestamp scalars to
+      // it — Map, class instances, …) are rejected, never treated as
+      // key-less passes: the harness rejects them too.
+      const proto = Object.getPrototypeOf(node)
+      ok = (proto === Object.prototype || proto === null)
+        && Reflect.ownKeys(node).every((key) => typeof key === 'string'
+          && Object.prototype.propertyIsEnumerable.call(node, key)
+          && walk((node as Record<string, unknown>)[key]))
+    }
+    ancestors.delete(node)
+    return ok
+  }
+  return walk(value)
+}
+
 /** Normalize a raw mcp-client row config into the shared shape. */
 export function toServerConfig(raw: unknown): McpServerConfig {
   const cfg = (raw ?? {}) as Record<string, unknown>
+  // Conditional spreads, not `key: cond ? val : undefined`: tool outputs are
+  // validated as lossless JSON, and a present-but-undefined own property makes
+  // the whole value fail that validation (issue #10). Optional keys must be
+  // absent when unconfigured, not present with an undefined value. Composite
+  // and number values additionally pass isLossless(): a user-authored row can
+  // carry `.inf`/`.nan`/`-0` scalars, which fail the same validation. `args`
+  // must also conform to its declared string-array schema (a YAML row like
+  // `args: [8080]` resolves the unquoted number); string-ness alone would not
+  // reject sparse arrays, so isLossless still gates it.
   return {
     serverName: typeof cfg.serverName === 'string' ? cfg.serverName : '',
     transport: cfg.transport === 'stdio' ? 'stdio' : 'streamable-http',
-    url: typeof cfg.url === 'string' ? cfg.url : undefined,
-    command: typeof cfg.command === 'string' ? cfg.command : undefined,
-    args: Array.isArray(cfg.args) ? cfg.args : undefined,
-    env: isRecord(cfg.env) ? cfg.env as Record<string, string> : undefined,
-    cwd: typeof cfg.cwd === 'string' ? cfg.cwd : undefined,
-    headers: isRecord(cfg.headers) ? cfg.headers as Record<string, string> : undefined,
-    toolCallTimeoutMs: typeof cfg.toolCallTimeoutMs === 'number' ? cfg.toolCallTimeoutMs : undefined,
-    failOnStartupError: typeof cfg.failOnStartupError === 'boolean' ? cfg.failOnStartupError : undefined,
-    reconnect: isRecord(cfg.reconnect) ? cfg.reconnect : undefined,
+    ...(typeof cfg.url === 'string' ? { url: cfg.url } : {}),
+    ...(typeof cfg.command === 'string' ? { command: cfg.command } : {}),
+    ...(Array.isArray(cfg.args) && isLossless(cfg.args) && cfg.args.every((item) => typeof item === 'string')
+      ? { args: cfg.args } : {}),
+    ...(isRecord(cfg.env) && isLossless(cfg.env) ? { env: cfg.env as Record<string, string> } : {}),
+    ...(typeof cfg.cwd === 'string' ? { cwd: cfg.cwd } : {}),
+    ...(isRecord(cfg.headers) && isLossless(cfg.headers) ? { headers: cfg.headers as Record<string, string> } : {}),
+    ...(typeof cfg.toolCallTimeoutMs === 'number' && isLossless(cfg.toolCallTimeoutMs)
+      ? { toolCallTimeoutMs: cfg.toolCallTimeoutMs } : {}),
+    ...(typeof cfg.failOnStartupError === 'boolean' ? { failOnStartupError: cfg.failOnStartupError } : {}),
+    ...(isRecord(cfg.reconnect) && isLossless(cfg.reconnect) ? { reconnect: cfg.reconnect } : {}),
   }
 }
 
