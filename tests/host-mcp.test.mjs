@@ -75,19 +75,44 @@ function assertErrorCode(promise, code, message) {
 }
 
 /**
- * Mirror of the harness tool-output validator (dsh-session snapshotJsonValue):
- * a present-but-undefined own property makes the whole value non-lossless
- * JSON, which rejects the tool call outright. Walk own enumerable keys.
+ * Mirror of the harness lossless-JSON validator (dsh-session walkJsonValue):
+ * accepts null / booleans / strings, finite non-(-0) numbers, hole-free plain
+ * arrays, and plain records with enumerable string keys; rejects cycles,
+ * sparse arrays, exotic prototypes, and any other value. Any violated rule
+ * means the harness would reject the whole tool call.
  */
-function assertLossless(node, path) {
-  if (node === undefined) {
-    throw new Error(`output${path} is undefined — tool output is not lossless JSON`);
+function assertLossless(node, path, seen = new Set()) {
+  if (node === null || typeof node === 'boolean' || typeof node === 'string') return;
+  if (typeof node === 'number') {
+    if (!Number.isFinite(node) || Object.is(node, -0)) {
+      throw new Error(`output${path} is ${String(node)} — tool output is not lossless JSON`);
+    }
+    return;
   }
+  if (typeof node !== 'object') {
+    throw new Error(`output${path} has type ${typeof node} — tool output is not lossless JSON`);
+  }
+  if (seen.has(node)) throw new Error(`output${path} is cyclic — tool output is not lossless JSON`);
+  seen.add(node);
   if (Array.isArray(node)) {
-    node.forEach((item, index) => assertLossless(item, `${path}[${index}]`));
-  } else if (node !== null && typeof node === 'object') {
-    for (const [key, value] of Object.entries(node)) assertLossless(value, `${path}.${key}`);
+    if (Object.getPrototypeOf(node) !== Array.prototype || Reflect.ownKeys(node).length !== node.length + 1) {
+      throw new Error(`output${path} is a sparse or non-plain array — tool output is not lossless JSON`);
+    }
+    node.forEach((item, index) => assertLossless(item, `${path}[${index}]`, seen));
+  } else {
+    const proto = Object.getPrototypeOf(node);
+    if (proto !== Object.prototype && proto !== null) {
+      throw new Error(`output${path} is not a plain object — tool output is not lossless JSON`);
+    }
+    const keys = Reflect.ownKeys(node);
+    for (const key of keys) {
+      if (typeof key !== 'string' || !Object.prototype.propertyIsEnumerable.call(node, key)) {
+        throw new Error(`output${path} has a non-enumerable or symbol key — tool output is not lossless JSON`);
+      }
+      assertLossless(node[key], `${path}.${key}`, seen);
+    }
   }
+  seen.delete(node);
 }
 
 test('toServerConfig: minimal raw config → no undefined-valued keys survive (lossless-JSON safe)', () => {
@@ -119,11 +144,39 @@ test('toServerConfig: empty/garbage raw config → safe defaults, no undefined v
   }
 });
 
+test('toServerConfig: non-lossless scalar values (NaN/Infinity/-0) are omitted from the projection', () => {
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0]) {
+    const config = toServerConfig({ toolCallTimeoutMs: bad });
+    assertLossless(config, '');
+    assert.equal('toolCallTimeoutMs' in config, false, `toolCallTimeoutMs ${String(bad)} must be omitted`);
+  }
+  assert.equal(toServerConfig({ toolCallTimeoutMs: 1234 }).toolCallTimeoutMs, 1234, 'finite non-(-0) numbers are kept');
+});
+
+test('toServerConfig: composite values containing non-lossless content are omitted', () => {
+  // js-yaml resolves `.inf`/`.nan` scalars to ±Infinity/NaN in user-authored rows.
+  assert.equal('env' in toServerConfig({ env: { A: Number.POSITIVE_INFINITY } }), false, 'env with a non-finite value must be omitted');
+  assert.equal('env' in toServerConfig({ env: { A: '1' } }), true, 'string-valued env is kept');
+  assert.equal('headers' in toServerConfig({ headers: { h: Number.NaN } }), false, 'headers with a non-finite value must be omitted');
+  const sparse = ['a'];
+  sparse[2] = 'b';
+  assert.equal('args' in toServerConfig({ args: sparse }), false, 'sparse args must be omitted');
+  assert.equal('args' in toServerConfig({ args: ['--x'] }), true, 'plain args are kept');
+  const cyclic = { initialDelayMs: 100 };
+  cyclic.self = cyclic;
+  assert.equal('reconnect' in toServerConfig({ reconnect: cyclic }), false, 'cyclic reconnect must be omitted');
+  assert.equal('reconnect' in toServerConfig({ reconnect: { initialDelayMs: 100 } }), true, 'plain reconnect is kept');
+});
 test('manager_mcp_list: output is lossless-JSON safe and schema-complete (issue #10)', async () => {
   const entries = [
     loaderEntry('include:gh', MCP_CLIENT_PACKAGE, { serverName: 'gh', transport: 'stdio', command: 'npx' }),
     loaderEntry('include:web', MCP_CLIENT_PACKAGE, {
       serverName: 'web', transport: 'streamable-http', url: 'http://127.0.0.1:24440/mcp', env: { A: '1' },
+    }),
+    // A user-authored row with `.inf` (js-yaml → Infinity) must not break the
+    // whole listing — the key is omitted from the projection instead.
+    loaderEntry('include:bad', MCP_CLIENT_PACKAGE, {
+      serverName: 'bad', transport: 'stdio', command: 'node', toolCallTimeoutMs: Number.POSITIVE_INFINITY,
     }),
   ];
   await withPlugin(entries, async ({ toolMap }) => {
@@ -133,6 +186,9 @@ test('manager_mcp_list: output is lossless-JSON safe and schema-complete (issue 
     const gh = value.servers.find((server) => server.id === 'gh');
     assert.equal(gh.command, 'npx', 'configured keys keep their values');
     assert.equal('url' in gh, false, 'unconfigured optional keys must be absent');
+    const bad = value.servers.find((server) => server.id === 'bad');
+    assert.ok(bad, 'the .inf-configured server is still listed');
+    assert.equal('toolCallTimeoutMs' in bad, false, 'the non-lossless timeout is omitted');
     // Second harness layer: the registered output schema uses
     // additionalProperties: false, so every returned item key must be declared
     // in the *converted* schema (valueSchema is what the registry sees).
