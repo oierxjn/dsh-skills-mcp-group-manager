@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { apply } from '../src/index.ts';
 
 /** Minimal fake ctx capturing every registration the host half performs. */
-function fakeCtx() {
+function fakeCtx(options = {}) {
   const tools = [];
   const toolDisposers = [];
   const effects = [];
@@ -51,6 +51,7 @@ function fakeCtx() {
       if (key === 'webServer' || key === 'httpServer') {
         return { register(route) { routes.push(route); return () => {}; } };
       }
+      if (key === 'connection') return options.connection;
       return undefined;
     },
     plugin() { throw new Error('ctx.plugin should not be called in this test'); },
@@ -76,17 +77,30 @@ async function withTempHome(fn) {
 
 /** Invoke the registered RPC route with a JSON body; returns { status, ...envelope }. */
 async function callRpc(routes, method, args, options = {}) {
+  const raw = await callRaw(routes, JSON.stringify({ method, args: args ?? {} }), options);
+  return { status: raw.status, ...JSON.parse(raw.body) };
+}
+
+/**
+ * Invoke the registered RPC route with a raw body string; returns the raw
+ * response (status + headers + body text) without JSON parsing, for the
+ * gate/405/415 paths that answer with a bare or non-business body.
+ */
+async function callRaw(routes, bodyText, options = {}) {
   assert.equal(routes.length, 1, 'exactly one RPC route registered');
-  const req = [Buffer.from(JSON.stringify({ method, args: args ?? {} }))];
-  req.headers = options.headers ?? {};
+  const req = [Buffer.from(bodyText)];
+  req.method = options.method ?? 'POST';
+  // The browser half always POSTs application/json; tests opt out explicitly.
+  req.headers = { 'content-type': 'application/json', ...(options.headers ?? {}) };
   let status;
+  let resHeaders;
   let body;
   const res = {
-    writeHead(code) { status = code; },
+    writeHead(code, headers) { status = code; resHeaders = headers ?? {}; },
     end(chunk) { body = chunk; },
   };
   await routes[0].handler(req, res);
-  return { status, ...JSON.parse(body) };
+  return { status, headers: resHeaders, body: body ?? '' };
 }
 
 /**
@@ -301,13 +315,14 @@ test('manager.session.get/set RPC: follow-global, override, empty, unknown id, r
   });
 });
 
-// The RPC route is the browser half's only write path and accepts untrusted
-// JSON that can spawn MCP child processes (manager.mcp.add/probe). The host
-// webserver has no origin policy, so the plugin must reject cross-origin
-// browser requests itself: a cross-origin POST always carries an Origin
+// Fallback tier of the RPC request gate: WITHOUT a `connection` service in
+// the composition, the plugin still enforces its own loopback-Origin CSRF
+// guard (the route is the browser half's only write path and accepts
+// untrusted JSON that can spawn MCP child processes via manager.mcp.add /
+// manager.mcp.probe). A cross-origin browser POST always carries an Origin
 // header naming the attacker's site, while the loopback-served GUI carries a
 // loopback Origin (or none, for non-browser callers).
-test('RPC route rejects cross-origin requests (CSRF guard)', async () => {
+test('RPC route rejects cross-origin requests (CSRF guard, connection absent)', async () => {
   await withTempHome(async () => {
     const { ctx, effects, routes } = fakeCtx();
     apply(ctx, {});
@@ -340,6 +355,75 @@ test('RPC route rejects cross-origin requests (CSRF guard)', async () => {
     res = await callRpc(routes, 'manager.state.get', {}, { headers: { origin: 'http://evil.example@127.0.0.1:3080' } });
     assert.equal(res.status, 403);
     assert.equal(res.error.code, 'forbidden-origin');
+  });
+});
+
+// Primary tier of the RPC request gate: WITH a `connection` service in the
+// composition, every request defers to `connection.requestRejection` — the
+// same Host/Origin fence plus browser authentication the harness's first-party
+// routes use (the 0.1.5 open-in-app posture). Rejections keep the structured
+// error envelope so the browser half can render them.
+test('RPC route defers to connection.requestRejection when the service exists', async () => {
+  await withTempHome(async () => {
+    // 403: untrusted Host/Origin (DNS rebinding / cross-site) → JSON 403.
+    const forbidden = fakeCtx({ connection: { requestRejection: () => 403 } });
+    apply(forbidden.ctx, {});
+    forbidden.effects.find((effect) => effect.label === 'mcp-skill-manager: rpc route').callback();
+    let res = await callRpc(forbidden.routes, 'manager.state.get', {});
+    assert.equal(res.status, 403);
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'forbidden-origin');
+
+    // 401: trusted origin but unauthenticated browser → JSON 401.
+    const unauthorized = fakeCtx({ connection: { requestRejection: () => 401 } });
+    apply(unauthorized.ctx, {});
+    unauthorized.effects.find((effect) => effect.label === 'mcp-skill-manager: rpc route').callback();
+    res = await callRpc(unauthorized.routes, 'manager.state.get', {});
+    assert.equal(res.status, 401);
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'unauthenticated');
+
+    // undefined: trusted and authenticated → the request reaches the method table.
+    const trusted = fakeCtx({ connection: { requestRejection: () => undefined } });
+    apply(trusted.ctx, {});
+    trusted.effects.find((effect) => effect.label === 'mcp-skill-manager: rpc route').callback();
+    res = await callRpc(trusted.routes, 'manager.state.get', {});
+    assert.equal(res.status, 200);
+    assert.equal(res.ok, true);
+  });
+});
+
+// Wire hygiene on the RPC route (mirrors the open-in-app route contract): the
+// gate runs first, then POST-only, then application/json-only.
+test('RPC route enforces POST-only and application/json-only after the gate', async () => {
+  await withTempHome(async () => {
+    const { ctx, effects, routes } = fakeCtx();
+    apply(ctx, {});
+    effects.find((effect) => effect.label === 'mcp-skill-manager: rpc route').callback();
+
+    // GET → 405 with the single allowed method.
+    let raw = await callRaw(routes, '', { method: 'GET' });
+    assert.equal(raw.status, 405);
+    assert.equal(raw.headers.allow, 'POST');
+
+    // POST with a non-JSON media type → 415 (structured error).
+    raw = await callRaw(routes, 'hello', { headers: { 'content-type': 'text/plain' } });
+    assert.equal(raw.status, 415);
+    const envelope = JSON.parse(raw.body);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.error.code, 'unsupported-media-type');
+
+    // POST without any content-type is also refused (String(undefined) never matches).
+    raw = await callRaw(routes, '{}', { headers: { 'content-type': undefined } });
+    assert.equal(raw.status, 415);
+
+    // The gate still runs BEFORE the wire checks: a rejected request gets the
+    // gate's answer, not 405/415.
+    const gated = fakeCtx({ connection: { requestRejection: () => 401 } });
+    apply(gated.ctx, {});
+    gated.effects.find((effect) => effect.label === 'mcp-skill-manager: rpc route').callback();
+    raw = await callRaw(gated.routes, '', { method: 'GET' });
+    assert.equal(raw.status, 401);
   });
 });
 

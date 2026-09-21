@@ -136,6 +136,20 @@ interface WebServerService {
 }
 
 /**
+ * The composition's `connection` service, as far as this plugin consumes it:
+ * the Host/Origin fence plus browser authentication that first-party routes
+ * apply to every request (mirrors the browser-side connection package's
+ * `requestRejection`; locally typed because that package never reaches the
+ * host typecheck). `403` = untrusted Host/Origin (DNS rebinding / cross-site),
+ * `401` = trusted origin but unauthenticated browser, `undefined` = allow.
+ */
+interface ConnectionService {
+  requestRejection(request: {
+    readonly headers: import('node:http').IncomingMessage['headers'];
+  }): 401 | 403 | undefined;
+}
+
+/**
  * The bundle-plugin context: the plugin `apply()` receives this object, and
  * per-service registries are also reachable through `ctx.get(key)`.
  */
@@ -145,8 +159,8 @@ interface HostPluginContext {
     warn?: (message?: unknown, ...rest: unknown[]) => void;
     error?: (message?: unknown, ...rest: unknown[]) => void;
   };
-  /** Resolve an injected service by key (e.g. 'webServer' / 'httpServer'). */
-  get(key: string): unknown;
+  /** Resolve an injected service by key (e.g. 'webServer' / 'connection'); strict=false yields undefined when absent. */
+  get(key: string, strict?: boolean): unknown;
   /** Register a fiber-scoped side effect; the returned disposer (if any) runs on dispose. */
   effect(setup: () => unknown, label?: string): void;
   /** Subscribe to agent lifecycle events (payload carries the agent). */

@@ -115,6 +115,10 @@ npm run prepublishOnly # = typecheck + test(npm publish 前自动触发)
 
 `manager_groups_list/create/delete/rename/set_enabled/add_skill/remove_skill`、`manager_skills_list`、`manager_session_get/set`(作用于调用方会话)、`manager_mcp_list/toggle/add/update/remove`(语义 = 编辑 `cordis.patch.yml`)。连接探测仅走 RPC(`manager.mcp.probe`),不进工具面。
 
+### 🔒 RPC 安全姿态
+
+RPC 路由与宿主第一方路由同 posture(对齐 0.1.5 的 `open-in-app` 官方范例):仅接受 `POST` + `application/json`(否则 405 / 415);组合中存在 `connection` 服务时,每个请求先过 `connection.requestRejection`——Host/Origin 栅栏(防 DNS rebinding 与跨站调用,403)+ 浏览器登录认证(401),拒绝以结构化错误信封返回;组合无 `connection` 服务(裸 webServer 载体)时,回退到插件内置的 loopback-Origin CSRF 守卫(跨源浏览器请求 403,无 Origin 头的非浏览器调用方不受影响)。
+
 ## ⚠️ Breaking change(0.3.x → 0.4.0)
 
 - **MCP 配置的单一事实源改为 profile 的 `cordis.patch.yml`**(默认 `~/.dsh/profiles/web/cordis.patch.yml`,可用插件行 config 的 `patchFile`/`profile` 覆盖)。`state.json` 的 `mcp` 段被弃用且不做迁移:旧版中添加的用户 MCP 服务器与禁用标记需在面板重新添加/停用。
