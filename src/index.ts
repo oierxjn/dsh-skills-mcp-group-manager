@@ -1027,19 +1027,22 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
   // The host webserver provides no origin policy (its README: "No TLS, auth,
   // or origin policy"), while this route accepts untrusted JSON that mutates
   // state and can spawn MCP child processes (a stdio `command` via
-  // manager.mcp.add / manager.mcp.probe). A cross-origin browser POST always
-  // carries an `Origin` header naming the attacker's site, so requiring any
-  // present Origin to name a loopback host blocks CSRF (and DNS-rebinding)
-  // while leaving the loopback-served GUI and non-browser callers (no Origin
-  // header) untouched. Binding `0.0.0.0` deliberately exposes the server; that
-  // posture should be fronted by a real reverse proxy (the harness recommends
-  // the same), not handled here.
+  // manager.mcp.add / manager.mcp.probe). The request gate mirrors the
+  // harness's first-party posture (the 0.1.5 open-in-app plugin): when the
+  // composition provides the `connection` service, every request must pass
+  // its `requestRejection` — the Host/Origin fence that defeats DNS rebinding
+  // and cross-site calls, plus browser authentication. Compositions without
+  // `connection` (a raw webServer carrier only) fall back to the in-plugin
+  // loopback-Origin CSRF guard kept below. Binding `0.0.0.0` deliberately
+  // exposes the server; that posture should be fronted by a real reverse
+  // proxy (the harness recommends the same), not handled here.
   const LOOPBACK_ORIGIN_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
 
   /**
-   * CSRF guard: allow the request only when it carries no Origin header
-   * (same-origin form, or a non-browser caller like curl/another plugin) or
-   * its Origin names a loopback host (the default bind posture).
+   * CSRF fallback guard (no `connection` service): allow the request only
+   * when it carries no Origin header (same-origin form, or a non-browser
+   * caller like curl/another plugin) or its Origin names a loopback host
+   * (the default bind posture).
    */
   function isAllowedOrigin(req: import('node:http').IncomingMessage): boolean {
     const origin = req.headers.origin
@@ -1054,6 +1057,34 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
     }
   }
 
+  /** JSON envelope for a gate rejection (structured like every RPC error). */
+  function rejectWith(res: import('node:http').ServerResponse, status: number, code: string, message: string): void {
+    sendJson(res, status, { ok: false, error: { code, message } })
+  }
+
+  /**
+   * Answer untrusted/unauthenticated requests; returns true when it did.
+   * The `connection` service is resolved lazily per request (lenient get), so
+   * a connection that registers after this route is mounted is still honored
+   * without re-registering the route.
+   */
+  function rejectRequest(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): boolean {
+    const connection = ctx.get('connection', false) as ConnectionService | undefined
+    if (connection !== undefined) {
+      const rejection = connection.requestRejection(req)
+      if (rejection === undefined) return false
+      rejectWith(res, rejection,
+        rejection === 401 ? 'unauthenticated' : 'forbidden-origin',
+        rejection === 401 ? 'browser authentication required' : 'request is not trusted by the host/origin fence')
+      return true
+    }
+    if (!isAllowedOrigin(req)) {
+      rejectWith(res, 403, 'forbidden-origin', 'cross-origin requests are not allowed')
+      return true
+    }
+    return false
+  }
+
   let webRegistered = false
   const registerWebSurface = (): void => {
     if (webRegistered) return
@@ -1064,8 +1095,18 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
       kind: 'exact',
       path: RPC_PATH,
       handler: async (req, res) => {
-        if (!isAllowedOrigin(req)) {
-          sendJson(res, 403, { ok: false, error: { code: 'forbidden-origin', message: 'cross-origin requests are not allowed' } })
+        if (rejectRequest(req, res)) return
+        if (req.method !== 'POST') {
+          res.writeHead(405, { allow: 'POST' })
+          res.end()
+          return
+        }
+        // Body-format validation at the wire: the essence must be exactly
+        // application/json. String(undefined) is 'undefined', which never
+        // matches (same check as the harness's open-in-app route).
+        const essence = String(req.headers['content-type']).split(';', 1)[0]?.trim().toLowerCase()
+        if (essence !== 'application/json') {
+          rejectWith(res, 415, 'unsupported-media-type', 'content-type must be application/json')
           return
         }
         try {
