@@ -95,7 +95,7 @@ import type {
 } from './types.ts'
 
 export const name = 'mcp-skill-manager'
-export const inject = ['skills', 'tools', 'agents', 'loader']
+export const inject = ['skills', 'tools', 'agents', 'loader', 'workspaceRegistry']
 
 /** Unique shadow provider name; the registry merges by skill name, not provider name. */
 const SHADOW_PROVIDER_NAME = 'skill-manager-filter'
@@ -217,19 +217,17 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
   }
 
   /**
-   * Pick the agent whose skill catalog the browser picker should display.
-   * Prefers the requested session id; falls back to the first live agent.
-   * Returns undefined when no live agent exists.
+   * Resolve the agent whose session id was explicitly requested (the
+   * manager_skills_list tool passes the caller's own exec.agent.id). Exact
+   * match only: the picker path (no sessionId) must NOT fall back to an
+   * arbitrary live agent — it enumerates every workspace instead.
+   * Returns undefined when no live agent matches.
    */
-  function resolveCatalogAgent(sessionId: string | undefined): AgentEntry | undefined {
+  function resolveSessionAgent(sessionId: string): AgentEntry | undefined {
     let agents: AgentEntry[]
     try { agents = ctx.agents.list() } catch { return undefined }
-    if (!Array.isArray(agents) || agents.length === 0) return undefined
-    if (typeof sessionId === 'string' && sessionId.length > 0) {
-      const found = agents.find((agent) => agent.id === sessionId)
-      if (found !== undefined) return found
-    }
-    return agents[0]
+    if (!Array.isArray(agents)) return undefined
+    return agents.find((agent) => agent.id === sessionId)
   }
 
   /**
@@ -294,29 +292,86 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
       return snapshotState(store.get())
     },
     /**
-     * The browser half has no per-session context; when a live agent exists,
-     * list through its scope so the shadow provider's catalog (the union of
-     * the global and preset layers) is what the picker displays. Without a
-     * live agent the global layer is listed as-is (empty when the host skill
-     * discovery is disabled by a patch row).
+     * Two views share this entry:
+     *
+     * - Tool path (`args.sessionId` = the caller's own agent id): list through
+     *   that agent's scope so the shadow provider's catalog (the union of the
+     *   global and preset layers) is what the calling session sees.
+     * - Picker path (browser half, no sessionId): the picker must offer every
+     *   groupable skill regardless of which sessions are live. A session cwd
+     *   only reveals its own workspace's project skills, so instead enumerate
+     *   the UNFILTERED root catalog once per registered workspace (plus per
+     *   live agent cwd as a belt-and-suspenders) and merge by name. Without
+     *   any cwd the filesystem provider collects user-level roots only, so a
+     *   fully idle host still needs the per-cwd passes to see project skills.
+     *   Group membership is name-based, and each session later resolves those
+     *   names against its own catalog, so merging never widens what a
+     *   specific session can invoke.
      */
     async skillsList(args?: SkillsListArgs) {
-      const agent = resolveCatalogAgent(args?.sessionId)
-      const all = agent === undefined
-        ? await ctx.skills.list()
-        : await ctx.skills.list({ cwd: agent.session?.header?.cwd, scope: agent })
-      return {
-        skills: all.map((skill) => ({
-          name: skill.name,
-          description: skill.description,
-          // The catalog guarantees an invocation policy; the cast preserves
-          // the original throw-on-missing runtime behavior.
-          invocation: {
-            modelInvocable: (skill.invocation as { modelInvocable: boolean; userInvocable: boolean }).modelInvocable,
-            userInvocable: (skill.invocation as { modelInvocable: boolean; userInvocable: boolean }).userInvocable,
-          },
-        })),
+      const toEntry = (skill: SkillCatalogEntry) => ({
+        name: skill.name,
+        description: skill.description,
+        // The catalog guarantees an invocation policy; the cast preserves
+        // the original throw-on-missing runtime behavior.
+        invocation: {
+          modelInvocable: (skill.invocation as { modelInvocable: boolean; userInvocable: boolean }).modelInvocable,
+          userInvocable: (skill.invocation as { modelInvocable: boolean; userInvocable: boolean }).userInvocable,
+        },
+      })
+      const requestedId = typeof args?.sessionId === 'string' && args.sessionId.length > 0
+        ? args.sessionId
+        : undefined
+      const agent = requestedId === undefined ? undefined : resolveSessionAgent(requestedId)
+      if (agent !== undefined) {
+        const all = await ctx.skills.list({ cwd: agent.session?.header?.cwd, scope: agent })
+        return { skills: all.map(toEntry) }
       }
+      // Picker view: union the unfiltered catalogs of every known cwd.
+      const cwds = new Set<string>()
+      const registry: WorkspaceRegistry | undefined = ctx.workspaceRegistry
+      if (registry !== undefined) {
+        let entities: ReturnType<WorkspaceRegistry['list']>
+        try { entities = registry.list() } catch { entities = [] }
+        if (Array.isArray(entities)) {
+          for (const entity of entities) {
+            if (typeof entity?.path === 'string' && entity.path.length > 0) cwds.add(entity.path)
+          }
+        }
+      }
+      let agents: AgentEntry[] = []
+      try { agents = ctx.agents.list() } catch { agents = [] }
+      if (Array.isArray(agents)) {
+        for (const live of agents) {
+          const cwd = live.session?.header?.cwd
+          if (typeof cwd === 'string' && cwd.length > 0) cwds.add(cwd)
+        }
+      }
+      if (cwds.size === 0) {
+        // Fresh host (no registered workspaces, no live agents): the bare
+        // collect still covers the user-level roots.
+        const all = await ctx.skills.list()
+        return { skills: all.map(toEntry) }
+      }
+      const merged = new Map<string, ReturnType<typeof toEntry>>()
+      for (const cwd of cwds) {
+        let all: SkillCatalogEntry[]
+        try {
+          all = await ctx.skills.list({ cwd })
+        } catch (error) {
+          // One unreadable workspace must not blank out the picker.
+          ctx.logger.warn?.(`skill collect failed for cwd ${cwd}: ${error instanceof Error ? error.message : String(error)}`)
+          continue
+        }
+        // First occurrence wins: workspaces come in registry order, so the
+        // same name resolves to the earliest registered workspace's summary.
+        for (const skill of all) {
+          if (skill.name !== undefined && skill.name !== null && skill.name !== '' && !merged.has(skill.name)) {
+            merged.set(skill.name, toEntry(skill))
+          }
+        }
+      }
+      return { skills: [...merged.values()] }
     },
     async groupsCreate(args?: GroupCreateArgs) {
       const nameArg = typeof args?.name === 'string' ? args.name.trim() : ''
@@ -742,7 +797,7 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
 
   tool({
     name: 'manager_skills_list',
-    description: 'List every skill currently available in the global catalog (name, description, invocation policy) for picking group members.',
+    description: 'List every skill currently available for picking group members (name, description, invocation policy). Without a session context this unions every registered workspace plus user-level skills, merged by name; with a session context it lists that session\'s own catalog.',
     parameters: {},
     output: {
       schema: {

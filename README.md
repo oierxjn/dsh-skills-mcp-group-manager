@@ -18,7 +18,7 @@
 
 ## ✨ 功能特性 / Features
 
-- **🎯 Skill 分组 / Skill Groups** — 创建/重命名/删除分组,分组可折叠;成员与挑选器均为列表 + 多选,支持搜索过滤后的全选/全不选与批量增删。
+- **🎯 Skill 分组 / Skill Groups** — 创建/重命名/删除分组,分组可折叠;成员与挑选器均为列表 + 多选,支持搜索过滤后的全选/全不选与批量增删。设置页挑选器枚举全部已注册工作区的项目级技能与用户级技能,按名字去重;枚举不依赖活动会话,宿主空闲时工作区技能同样可以加入分组。
 - **🧠 注入过滤 / Injection Filtering** — 上下文只注入启用分组中出现的 Skill(并集去重,一次一个);未分组 Skill 默认不注入;切换分组实时刷新目录。
 - **🧵 按会话分组 / Per-session Groups** — 每个会话可脱离全局独立勾选启用的分组(会话头部按钮弹出);未设置的会话跟随全局。详见下文「按会话分组」。
 - **🔌 MCP 管理 / MCP Management** — 以 profile 的 `cordis.patch.yml` 为唯一事实源:枚举 loader 组合中的全部 MCP 服务器(含实时状态与工具数),启停/增删改直接编辑补丁文件,由宿主 HMR 热重载真实生效(无需重启);支持一键连接探测(独立客户端 `initialize` + `tools/list`,8s 超时)。
@@ -96,7 +96,7 @@ npm run prepublishOnly # = typecheck + test(npm publish 前自动触发)
 
 约定:
 
-- **共享契约集中在 `src/types.ts`**(仅类型模块,`import type { ... } from './types.ts'` 完全擦除,不产生运行时代码);宿主平台面(注入的 skills/tools/agents/loader/webServer 服务)在 `types/dsh.d.ts` 以全局环境声明描述,浏览器平台面(`apply` 上下文 / locale / slots)在 `types/dsh-client.d.ts` 描述。
+- **共享契约集中在 `src/types.ts`**(仅类型模块,`import type { ... } from './types.ts'` 完全擦除,不产生运行时代码);宿主平台面(注入的 skills/tools/agents/loader/webServer/workspaceRegistry 服务)在 `types/dsh.d.ts` 以全局环境声明描述,浏览器平台面(`apply` 上下文 / locale / slots)在 `types/dsh-client.d.ts` 描述。
 - **类型转换只出现在边界**:不可信 JSON 入口(`args as unknown as X`)、惰性加载的第三方库(MCP SDK 的 exactOptionalPropertyTypes 不兼容处)、以及"运行时已由校验保证"的窄化点,均以显式转换并附注释。
 - **`tests/**` 不在 tsc 范围内**:测试的价值在行为(以 `node --test` 为锚点),其 mock 双对象若按严格检查标注需要为宿主内部面发明完整类型,收益低于噪声;client 半由独立的 `tsconfig.client.json` 检查(DOM lib、`types: []`,仅经 `@types/react` 提供 react 类型)。
 
