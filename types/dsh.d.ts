@@ -3,10 +3,11 @@
  * this plugin (host half: `src/index.ts`, `src/status.ts`, built to `lib/`).
  *
  * The real services are injected by the harness at runtime
- * (`inject: ['skills', 'tools', 'agents', 'loader']`); these declarations are
- * intentionally minimal and describe only the members the plugin actually
- * touches. This file is a global script (no top-level import/export), so the
- * interfaces below are visible to all checked JS files without imports.
+ * (`inject: ['skills', 'tools', 'agents', 'loader', 'workspaceRegistry']`);
+ * these declarations are intentionally minimal and describe only the members
+ * the plugin actually touches. This file is a global script (no top-level
+ * import/export), so the interfaces below are visible to all checked JS files
+ * without imports.
  */
 
 /** Options threaded through skill registry list/get calls. */
@@ -102,6 +103,24 @@ interface AgentRegistry {
   list(): AgentEntry[];
 }
 
+/** A registered workspace entity as returned by `workspaceRegistry.list()`. */
+interface WorkspaceEntity {
+  /** Canonical absolute path of the workspace directory. */
+  readonly path: string;
+  readonly title: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The `workspaceRegistry` service surface used by this plugin: the durable,
+ * persisted registry of workspaces (the GUI workspace switcher's list).
+ * `list()` is synchronous and independent of any live session, so the picker
+ * can enumerate project skills even when every workspace is idle.
+ */
+interface WorkspaceRegistry {
+  list(): WorkspaceEntity[];
+}
+
 /** A live loader-composition entry (one plugin instance in the tree). */
 interface LoaderEntryLive {
   id: string;
@@ -173,4 +192,5 @@ interface HostPluginContext {
   tools: ToolRegistry;
   agents: AgentRegistry;
   loader: LoaderRegistry;
+  workspaceRegistry: WorkspaceRegistry;
 }
