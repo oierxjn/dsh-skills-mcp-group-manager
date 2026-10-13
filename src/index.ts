@@ -109,6 +109,14 @@ const RPC_PATH = '/plugins/@jkljkluiouio/dsh-skills-mcp-group-manager/rpc'
 /** Max RPC request body bytes. */
 const MAX_RPC_BODY_BYTES = 64 * 1024
 
+/** Picker-facing skill entry: the loose union the picker merges from real `SkillSummary` entries and the disk-scan fallback. */
+interface PickerSkill {
+  name: string
+  description?: string | undefined
+  whenToUse?: string | undefined
+  invocation: SkillInvocationPolicy
+}
+
 /**
  * Host half plugin.
  *
@@ -143,21 +151,27 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
     // sessions are restored; get() resolves the service directly.
     const skills = agent.ctx.get('skills') as SkillRegistry | undefined
     if (skills === undefined) return
+    // The agent instance IS the scope key (scopeOf(agent.ctx) === agent): this
+    // provider is registered into that agent's own layer, so re-listing the
+    // unfiltered catalog for THAT scope — never the caller-supplied options,
+    // whose `scope` is not part of a provider's contract — is what lets the
+    // re-entrancy guard exclude our own layer while still reaching the preset
+    // layer that owns the real filesystem provider.
+    const scope = agent
     let controlRef: SkillProviderControl | undefined
     const dispose = skills.registerProvider((control) => {
       controlRef = control // factory runs synchronously; captured for invalidate()
       return {
         name: SHADOW_PROVIDER_NAME,
         async list(options) {
-          // List through the requesting scope; a re-entrant call (our own
-          // nested collect) yields [] so the lower layers (preset standing
-          // scope) win and the nested pass resolves the unfiltered catalog.
-          // Disabled skills get a double-false invocation so dsh-tool-skill's
-          // isModelInvocable filter drops them and the `skill` tool refuses
-          // to load them.
+          // A re-entrant call (our own nested collect) yields [] so the lower
+          // layers (preset standing scope) win and the nested pass resolves the
+          // unfiltered catalog. Disabled skills get a double-false invocation
+          // so dsh-tool-skill's isModelInvocable filter drops them and the
+          // `skill` tool refuses to load them.
           if (catalogReentry.getStore() !== undefined) return []
           const all = await catalogReentry.run({}, () =>
-            ctx.skills.list({ cwd: options.cwd, signal: options.signal, scope: options.scope }))
+            ctx.skills.list({ cwd: options.cwd, signal: options.signal, scope }))
           // Per-session selection: this agent's session override when present,
           // otherwise the global enabled-group union.
           const enabled = enabledSkillNamesFor(store.get(), agent.id)
@@ -198,7 +212,7 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
           controlRef?.invalidate()
           try {
             return await catalogReentry.run({}, () =>
-              ctx.skills.get(candidate.name, { cwd: options.cwd, signal: options.signal, scope: options.scope }))
+              ctx.skills.get(candidate.name, { cwd: options.cwd, signal: options.signal, scope }))
           } finally {
             controlRef?.invalidate()
           }
@@ -313,14 +327,12 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
      *   so merging never widens what a specific session can invoke.
      */
     async skillsList(args?: SkillsListArgs) {
-      const toEntry = (skill: SkillCatalogEntry) => ({
+      const toEntry = (skill: PickerSkill) => ({
         name: skill.name,
         description: skill.description,
-        // The catalog guarantees an invocation policy; the cast preserves
-        // the original throw-on-missing runtime behavior.
         invocation: {
-          modelInvocable: (skill.invocation as { modelInvocable: boolean; userInvocable: boolean }).modelInvocable,
-          userInvocable: (skill.invocation as { modelInvocable: boolean; userInvocable: boolean }).userInvocable,
+          modelInvocable: skill.invocation.modelInvocable,
+          userInvocable: skill.invocation.userInvocable,
         },
       })
       const requestedId = typeof args?.sessionId === 'string' && args.sessionId.length > 0
@@ -351,7 +363,7 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
         }
       }
       const merged = new Map<string, ReturnType<typeof toEntry>>()
-      const mergeAll = (all: SkillCatalogEntry[]): void => {
+      const mergeAll = (all: PickerSkill[]): void => {
         // First occurrence wins: workspaces come in registry order, so the
         // same name resolves to the earliest registered workspace's summary.
         for (const skill of all) {
@@ -363,7 +375,7 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
       const carrier = Array.isArray(agents) && agents.length > 0 ? agents[0] : undefined
       if (carrier !== undefined) {
         for (const cwd of cwds) {
-          let all: SkillCatalogEntry[]
+          let all: SkillSummary[]
           try {
             all = await ctx.skills.list({ cwd, scope: carrier })
           } catch (error) {
