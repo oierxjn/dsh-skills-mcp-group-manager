@@ -10,47 +10,86 @@
  * without imports.
  */
 
-/** Options threaded through skill registry list/get calls. */
-interface SkillQueryOptions {
+/** Provider-facing lookup options: only `cwd` and `signal` are part of a provider's contract. */
+interface SkillLookupOptions {
   cwd?: string | undefined;
   signal?: AbortSignal | undefined;
-  /** Requesting scope (e.g. an agent); opaque to this plugin. */
+}
+
+/** Registry-facing view options: provider options plus the viewing scope. */
+interface SkillViewOptions extends SkillLookupOptions {
+  /** Viewing scope (the calling agent); omitted reads the global layer alone. */
   scope?: unknown;
 }
 
-/** A skill entry as returned by `ctx.skills.list()`. */
-interface SkillCatalogEntry {
+/** Resolved model/user invocation controls carried by every catalog entry. */
+interface SkillInvocationPolicy {
+  modelInvocable: boolean;
+  userInvocable: boolean;
+}
+
+/** Invocation-neutral skill metadata returned by `ctx.skills.list()`. */
+interface SkillSummary {
+  /** Absolute instruction file path when supplied by the provider; absent for virtual skills. */
+  path?: string | undefined;
+  /** Kebab-case identifier used to address the skill. */
   name: string;
-  description?: string | undefined;
+  /** Short routing description (non-empty). */
+  description: string;
+  /** Optional extra routing guidance. */
   whenToUse?: string | undefined;
-  resourceBase?: string | undefined;
-  source?: string | undefined;
-  invocation?: { modelInvocable: boolean; userInvocable: boolean } | undefined;
-  [key: string]: unknown;
+  /** Resolved model and user invocation controls. */
+  invocation: SkillInvocationPolicy;
+  /** Discovery source that produced this winning skill. */
+  source: string;
+  /** Provider that owns this skill body. */
+  provider: string;
+  /** Provider-specific base for relative resources. */
+  resourceBase?: unknown;
+}
+
+/** Provider catalog entry used by the registry to merge and later load skills. */
+interface SkillCandidate extends SkillSummary {
+  /** Lower ranks win duplicate skill names before provider registration order is considered. */
+  rank: number;
+  /** Opaque provider-owned handle passed back to `provider.get()`. */
+  locator: unknown;
+  /** Parsed optional metadata object from provider-specific frontmatter. */
+  metadata?: Readonly<Record<string, unknown>> | undefined;
+}
+
+/** Complete parsed skill definition, including the body loaded by `ctx.skills.get()`. */
+interface SkillDefinition extends SkillSummary {
+  /** Markdown instruction body after provider-specific metadata removal. */
+  content: string;
+  /** Parsed optional metadata object from frontmatter. */
+  metadata?: Readonly<Record<string, unknown>> | undefined;
+}
+
+/** Provider candidates plus whether the current discovery is authoritative. */
+interface SkillProviderObservation {
+  readonly candidates: readonly SkillCandidate[];
+  readonly complete: boolean;
 }
 
 /** Invalidation handle handed to a skill-provider factory. */
 interface SkillProviderControl {
+  /** Aborts when the exact provider registration is disposed. */
+  signal: AbortSignal;
   invalidate(): void;
-}
-
-/** A skill-catalog candidate passed back into `provider.get()`. */
-interface SkillCandidate {
-  name: string;
-  [key: string]: unknown;
 }
 
 /** Shadow provider object returned by a skill-provider factory. */
 interface SkillProvider {
   name: string;
-  list(options: SkillQueryOptions): Promise<Record<string, unknown>[]>;
-  get(candidate: SkillCandidate, options: SkillQueryOptions): Promise<unknown>;
+  list(options: SkillLookupOptions): Promise<readonly SkillCandidate[] | SkillProviderObservation>;
+  get(candidate: SkillCandidate, options: SkillLookupOptions): Promise<SkillDefinition | undefined>;
 }
 
 /** The `skills` registry service surface used by this plugin. */
 interface SkillRegistry {
-  list(options?: SkillQueryOptions): Promise<SkillCatalogEntry[]>;
-  get(name: string, options?: SkillQueryOptions): Promise<unknown>;
+  list(options?: SkillViewOptions): Promise<SkillSummary[]>;
+  get(name: string, options?: SkillViewOptions): Promise<SkillDefinition | undefined>;
   /** Register a layered provider; returns a disposer. */
   registerProvider(
     factory: (control: SkillProviderControl) => SkillProvider,

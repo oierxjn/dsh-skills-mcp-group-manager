@@ -587,11 +587,14 @@ test('shadow list survives its own nested registry pass (scope re-entrancy)', as
       { name: 'skill-two', description: 'two', invocation: { modelInvocable: true, userInvocable: true }, source: 'preset', rank: 100, provider: 'filesystem' },
     ];
 
-    const requested = { cwd: '.', signal: new AbortController().signal, scope: agent };
+    // A foreign object, deliberately NOT the captured agent: the shadow must
+    // forward the CAPTURED agent scope (scope = agent), never options.scope
+    // (scope is not part of a provider's contract in dsh 0.2.x).
+    const requested = { cwd: '.', signal: new AbortController().signal, scope: {} };
     let nestedPasses = 0;
     const reentrantResults = [];
     ctx.skills.list = async (options) => {
-      assert.equal(options.scope, requested.scope, 'the shadow must forward the requesting scope');
+      assert.equal(options.scope, agent, 'the shadow must forward the captured agent scope, not options.scope');
       nestedPasses += 1;
       assert.ok(nestedPasses <= 2, `runaway recursion: ${nestedPasses} nested passes`);
       // The registry reaches the agent layer and re-invokes the shadow
