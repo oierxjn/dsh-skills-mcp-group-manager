@@ -75,6 +75,7 @@ import {
   toServerConfig,
 } from './status.ts'
 import { probeServer } from './probe.ts'
+import { scanSkillDirectories } from './skill-scan.ts'
 import type {
   GroupCreateArgs,
   GroupIdArgs,
@@ -298,15 +299,18 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
      *   that agent's scope so the shadow provider's catalog (the union of the
      *   global and preset layers) is what the calling session sees.
      * - Picker path (browser half, no sessionId): the picker must offer every
-     *   groupable skill regardless of which sessions are live. A session cwd
-     *   only reveals its own workspace's project skills, so instead enumerate
-     *   the UNFILTERED root catalog once per registered workspace (plus per
-     *   live agent cwd as a belt-and-suspenders) and merge by name. Without
-     *   any cwd the filesystem provider collects user-level roots only, so a
-     *   fully idle host still needs the per-cwd passes to see project skills.
-     *   Group membership is name-based, and each session later resolves those
-     *   names against its own catalog, so merging never widens what a
-     *   specific session can invoke.
+     *   groupable skill regardless of which session is live. A session cwd
+     *   only reveals its own workspace's project skills, so collect once per
+     *   registered workspace (plus per live agent cwd) and merge by name. The
+     *   scope still matters: the web-app patch disables the base host
+     *   skill-filesystem row and presets mount their own, so that provider
+     *   lives in the preset layer — a scope-less collect (global layer only)
+     *   sees no project skills even with a cwd. With a live agent, its scope
+     *   chain (agent → preset → global) carries the layer and it fronts every
+     *   cwd. On an idle host no scope exists, so the fallback reads the same
+     *   directories from disk (skill-scan). Group membership is name-based,
+     *   and each session later resolves those names against its own catalog,
+     *   so merging never widens what a specific session can invoke.
      */
     async skillsList(args?: SkillsListArgs) {
       const toEntry = (skill: SkillCatalogEntry) => ({
@@ -327,7 +331,6 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
         const all = await ctx.skills.list({ cwd: agent.session?.header?.cwd, scope: agent })
         return { skills: all.map(toEntry) }
       }
-      // Picker view: union the unfiltered catalogs of every known cwd.
       const cwds = new Set<string>()
       const registry: WorkspaceRegistry | undefined = ctx.workspaceRegistry
       if (registry !== undefined) {
@@ -347,22 +350,8 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
           if (typeof cwd === 'string' && cwd.length > 0) cwds.add(cwd)
         }
       }
-      if (cwds.size === 0) {
-        // Fresh host (no registered workspaces, no live agents): the bare
-        // collect still covers the user-level roots.
-        const all = await ctx.skills.list()
-        return { skills: all.map(toEntry) }
-      }
       const merged = new Map<string, ReturnType<typeof toEntry>>()
-      for (const cwd of cwds) {
-        let all: SkillCatalogEntry[]
-        try {
-          all = await ctx.skills.list({ cwd })
-        } catch (error) {
-          // One unreadable workspace must not blank out the picker.
-          ctx.logger.warn?.(`skill collect failed for cwd ${cwd}: ${error instanceof Error ? error.message : String(error)}`)
-          continue
-        }
+      const mergeAll = (all: SkillCatalogEntry[]): void => {
         // First occurrence wins: workspaces come in registry order, so the
         // same name resolves to the earliest registered workspace's summary.
         for (const skill of all) {
@@ -370,6 +359,40 @@ export function apply(ctx: HostPluginContext, config: { patchFile?: unknown; pro
             merged.set(skill.name, toEntry(skill))
           }
         }
+      }
+      const carrier = Array.isArray(agents) && agents.length > 0 ? agents[0] : undefined
+      if (carrier !== undefined) {
+        for (const cwd of cwds) {
+          let all: SkillCatalogEntry[]
+          try {
+            all = await ctx.skills.list({ cwd, scope: carrier })
+          } catch (error) {
+            // One unreadable workspace must not blank out the picker.
+            ctx.logger.warn?.(`skill collect failed for cwd ${cwd}: ${error instanceof Error ? error.message : String(error)}`)
+            continue
+          }
+          mergeAll(all)
+        }
+      } else {
+        // Idle host: no live scope carries the preset layer, so the registry
+        // cannot enumerate project skills at all. Best effort: read the same
+        // directories the provider would, straight from disk.
+        const scanned = await scanSkillDirectories({
+          cwds: [...cwds],
+          dshHome: process.env.DSH_HOME,
+          agentsHome: process.env.DSH_AGENTS_HOME,
+        })
+        mergeAll(scanned.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          ...(skill.whenToUse !== undefined ? { whenToUse: skill.whenToUse } : {}),
+          invocation: { modelInvocable: true, userInvocable: true },
+        })))
+        // Deployment-level providers register into the global layer, which a
+        // bare collect still covers.
+        try {
+          mergeAll(await ctx.skills.list())
+        } catch { /* an empty picker beats a thrown RPC */ }
       }
       return { skills: [...merged.values()] }
     },
